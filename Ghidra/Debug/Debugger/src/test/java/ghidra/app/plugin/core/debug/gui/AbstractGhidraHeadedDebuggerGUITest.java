@@ -54,8 +54,7 @@ import ghidra.app.util.viewer.listingpanel.ListingPanel;
 import ghidra.dbg.model.AbstractTestTargetRegisterBank;
 import ghidra.dbg.model.TestDebuggerModelBuilder;
 import ghidra.dbg.target.*;
-import ghidra.framework.model.DomainFile;
-import ghidra.framework.model.DomainObject;
+import ghidra.framework.model.*;
 import ghidra.framework.plugintool.PluginTool;
 import ghidra.program.database.ProgramDB;
 import ghidra.program.model.address.*;
@@ -454,8 +453,13 @@ public abstract class AbstractGhidraHeadedDebuggerGUITest
 
 	protected static void performEnabledAction(ActionContextProvider provider,
 			DockingActionIf action, boolean wait) {
-		ActionContext context = provider.getActionContext(null);
-		waitForCondition(() -> action.isEnabledForContext(context));
+		ActionContext context = waitForValue(() -> {
+			ActionContext ctx = provider.getActionContext(null);
+			if (!action.isEnabledForContext(ctx)) {
+				return null;
+			}
+			return ctx;
+		});
 		performAction(action, context, wait);
 	}
 
@@ -618,10 +622,24 @@ public abstract class AbstractGhidraHeadedDebuggerGUITest
 	protected void nop() {
 	}
 
-	protected void intoProject(DomainObject obj)
-			throws InvalidNameException, CancelledException, IOException {
+	protected void intoProject(DomainObject obj) {
 		waitForDomainObject(obj);
-		tool.getProject().getProjectData().getRootFolder().createFile(obj.getName(), obj, monitor);
+		DomainFolder rootFolder = tool.getProject()
+				.getProjectData()
+				.getRootFolder();
+		waitForCondition(() -> {
+			try {
+				rootFolder.createFile(obj.getName(), obj, monitor);
+				return true;
+			}
+			catch (InvalidNameException | CancelledException e) {
+				throw new AssertionError(e);
+			}
+			catch (IOException e) {
+				// Usually "object is busy". Try again.
+				return false;
+			}
+		});
 	}
 
 	protected void createSnaplessTrace(String langID) throws IOException {
