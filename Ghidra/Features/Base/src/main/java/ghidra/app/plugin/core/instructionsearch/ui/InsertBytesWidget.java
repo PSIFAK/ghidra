@@ -15,7 +15,8 @@
  */
 package ghidra.app.plugin.core.instructionsearch.ui;
 
-import java.awt.*;
+import java.awt.BorderLayout;
+import java.awt.Dimension;
 import java.awt.event.KeyEvent;
 import java.awt.event.KeyListener;
 import java.util.ArrayList;
@@ -24,7 +25,8 @@ import java.util.List;
 import javax.swing.JPanel;
 import javax.swing.JScrollPane;
 
-import docking.DialogComponentProvider;
+import docking.ReusableDialogComponentProvider;
+import generic.theme.GThemeDefaults.Colors.Messages;
 import ghidra.app.plugin.core.instructionsearch.model.*;
 import ghidra.app.plugin.core.instructionsearch.ui.SelectionModeWidget.InputMode;
 import ghidra.app.plugin.core.instructionsearch.util.InstructionSearchUtils;
@@ -41,7 +43,7 @@ import ghidra.util.SystemUtilities;
  * will then be disassembled and displayed in the {@link InstructionTable}.
  *
  */
-public class InsertBytesWidget extends DialogComponentProvider implements KeyListener {
+public class InsertBytesWidget extends ReusableDialogComponentProvider implements KeyListener {
 
 	// The input text area.  This is a generic JTextArea but displays a textual 'hint' to inform
 	// the user of what type of input is required.
@@ -245,7 +247,7 @@ public class InsertBytesWidget extends DialogComponentProvider implements KeyLis
 		}
 
 		// Everything looks good, so take the input and convert it to a Byte list, which we'll
-		// need for the PsuedoDisassembler.
+		// need for the PseudoDisassembler.
 		List<Byte> allBytes = InstructionSearchUtils.toByteArray(input);
 
 		// Now we have a valid byte string so we can start disassembling. To do this, we pass
@@ -290,7 +292,8 @@ public class InsertBytesWidget extends DialogComponentProvider implements KeyLis
 				// there's a problem with the input. Just print a message to the user and
 				// exit.
 				if (allBytes.size() < instruction.getLength()) {
-					msgPanel.setMessageText("Input invalid: unknown disassembly error.", Color.RED);
+					msgPanel.setMessageText("Input invalid: unknown disassembly error.",
+						Messages.ERROR);
 					return;
 				}
 				allBytes.subList(0, instruction.getLength()).clear();
@@ -300,7 +303,8 @@ public class InsertBytesWidget extends DialogComponentProvider implements KeyLis
 
 				// If there's an exception, just stop and let the user figure out what went
 				// wrong - no need to continue.
-				msgPanel.setMessageText("Input invalid: unknown disassembly error.", Color.RED);
+				msgPanel.setMessageText("Input invalid: unknown disassembly error.",
+					Messages.ERROR);
 				Msg.debug(this, "Error disassembling instruction", e);
 
 				return;
@@ -322,8 +326,9 @@ public class InsertBytesWidget extends DialogComponentProvider implements KeyLis
 	private List<OperandMetadata> createOperandMetadata(PseudoInstruction instruction)
 			throws MemoryAccessException {
 
-		List<OperandMetadata> operands = new ArrayList<>();
+		byte[] bytes = instruction.getParsedBytes();
 
+		List<OperandMetadata> operands = new ArrayList<>();
 		for (int i = 0; i < instruction.getNumOperands(); i++) {
 			OperandMetadata operandMD = new OperandMetadata();
 			operandMD.setOpType(instruction.getOperandType(i));
@@ -333,8 +338,9 @@ public class InsertBytesWidget extends DialogComponentProvider implements KeyLis
 			// prototype object in the pseudo instruction. For the value string we have to do
 			// a bit of calculating: we know the entire instruction byte string and we know
 			// this operand mask, so AND them together and we get the operand bytes.
-			byte[] mask = instruction.getPrototype().getOperandValueMask(i).getBytes();
-			byte[] value = InstructionSearchUtils.byteArrayAnd(mask, instruction.getBytes());
+			InstructionPrototype prototype = instruction.getPrototype();
+			byte[] mask = prototype.getOperandValueMask(i).getBytes();
+			byte[] value = InstructionSearchUtils.byteArrayAnd(mask, bytes);
 			MaskContainer maskContainer = new MaskContainer(mask, value);
 
 			operandMD.setMaskContainer(maskContainer);
@@ -358,8 +364,10 @@ public class InsertBytesWidget extends DialogComponentProvider implements KeyLis
 		// The mask array we can get directly from the prototype. For the value array we 
 		// have to figure out which bits pertain to operands and just zero them out, so we're
 		// just left with the instruction (mnemonic) bits.
-		byte[] mask = instruction.getPrototype().getInstructionMask().getBytes();
-		byte[] value = clearOperandBits(mask, instruction.getBytes());
+		InstructionPrototype prototype = instruction.getPrototype();
+		byte[] mask = prototype.getInstructionMask().getBytes();
+		byte[] value = instruction.getParsedBytes();
+		value = clearOperandBits(mask, value);
 		MaskContainer mnemonicMask = new MaskContainer(mask, value);
 
 		InstructionMetadata instructionMD = new InstructionMetadata(mnemonicMask);

@@ -23,14 +23,14 @@ import docking.widgets.OptionDialog;
 import ghidra.app.decompiler.ClangFieldToken;
 import ghidra.app.decompiler.ClangToken;
 import ghidra.app.plugin.core.decompile.DecompilerActionContext;
+import ghidra.app.util.HelpTopics;
 import ghidra.program.model.address.Address;
 import ghidra.program.model.data.*;
 import ghidra.program.model.listing.Function;
 import ghidra.program.model.listing.Program;
 import ghidra.program.model.pcode.*;
 import ghidra.program.model.symbol.SourceType;
-import ghidra.util.Msg;
-import ghidra.util.UndefinedFunction;
+import ghidra.util.*;
 import ghidra.util.exception.DuplicateNameException;
 import ghidra.util.exception.InvalidInputException;
 
@@ -50,7 +50,7 @@ public class ForceUnionAction extends AbstractDecompilerAction {
 
 	public ForceUnionAction() {
 		super("Force Union Field");
-//		setHelpLocation(new HelpLocation(HelpTopics.DECOMPILER, "ActionRenameField"));
+		setHelpLocation(new HelpLocation(HelpTopics.DECOMPILER, "ActionForceField"));
 		setPopupMenuData(new MenuData(new String[] { "Force Field" }, "Decompile"));
 //		setKeyBindingData(new KeyBindingData(KeyEvent.VK_L, 0));
 	}
@@ -93,6 +93,12 @@ public class ForceUnionAction extends AbstractDecompilerAction {
 		if (innerType instanceof Pointer) {
 			innerType = ((Pointer) innerType).getDataType();
 		}
+		else if (innerType instanceof PartialUnion) {
+			innerType = ((PartialUnion) innerType).getParent();
+			if (innerType instanceof TypeDef) {
+				innerType = ((TypeDef) innerType).getBaseDataType();
+			}
+		}
 		if (innerType == unionDt) {
 			return dt;
 		}
@@ -122,17 +128,25 @@ public class ForceUnionAction extends AbstractDecompilerAction {
 		int opcode = accessOp.getOpcode();
 		if (opcode == PcodeOp.PTRSUB) {
 			parentDt = typeIsUnionRelated(accessOp.getInput(0));
-			if (accessOp.getInput(1).getOffset() == 0) {	// Artificial op
-				accessVn = accessOp.getOutput();
-				accessOp = accessVn.getLoneDescend();
-				if (accessOp == null) {
-					return;
-				}
-				accessSlot = accessOp.getSlot(accessVn);
+			if (parentDt == null) {
+				accessOp = null;
+				return;
 			}
-			else {
-				accessVn = accessOp.getInput(0);
-				accessSlot = 0;
+			accessVn = accessOp.getInput(0);
+			accessSlot = 0;
+			if (accessOp.getInput(1).getOffset() == 0) {	// Artificial op
+				do {
+					Varnode tmpVn = accessOp.getOutput();
+					PcodeOp tmpOp = tmpVn.getLoneDescend();
+					if (tmpOp == null) {
+						break;
+					}
+					accessOp = tmpOp;
+					accessVn = tmpVn;
+					accessSlot = accessOp.getSlot(accessVn);
+				}
+				while (accessOp.getOpcode() == PcodeOp.PTRSUB &&
+					accessOp.getInput(1).getOffset() == 0);
 			}
 		}
 		else {
@@ -164,44 +178,45 @@ public class ForceUnionAction extends AbstractDecompilerAction {
 	/**
 	 * Build a list of all the union field names for the user to select from, when determining
 	 * which data-type to force.  Two lists are produced.  The first contains every possible
-	 * field name. The second list is filtered by the size of the Varnode being forced,
-	 * which must match the size of the selected field data-type.
+	 * field name. The second list is filtered by the size and offset of the Varnode being forced.
 	 * @param allFields will hold the unfiltered list of names
-	 * @param size is the size of the Varnode to filter on
 	 * @return the filtered list of names
 	 */
-	private String[] buildFieldOptions(ArrayList<String> allFields, int size) {
+	private String[] buildFieldOptions(ArrayList<String> allFields) {
+		int size = accessVn.getSize();
+		int startOff = 0;
+		boolean exactMatch = true;
+		if (parentDt instanceof Pointer) {
+			size = 0;
+		}
+		if (parentDt instanceof PartialUnion) {
+			startOff = ((PartialUnion) parentDt).getOffset();
+			exactMatch = false;
+		}
+		int endOff = startOff + size;
 		DataTypeComponent[] components = unionDt.getDefinedComponents();
 		ArrayList<String> res = new ArrayList<>();
 		allFields.add("(no field)");
-		if (size == 0 || unionDt.getLength() == size) {
+		if (size == 0 || !exactMatch || size == parentDt.getLength()) {
 			res.add("(no field)");
 		}
 		for (DataTypeComponent component : components) {
 			String nm = component.getFieldName();
+			if (nm == null || nm.length() == 0) {
+				nm = component.getDefaultFieldName();
+			}
 			allFields.add(nm);
-			if (size == 0 || component.getDataType().getLength() == size) {
+			int compStart = component.getOffset();
+			int compEnd = compStart + component.getLength();
+
+			if (size == 0 || (exactMatch && startOff == compStart && endOff == compEnd) ||
+				(!exactMatch && startOff >= compStart && endOff <= compEnd)) {
 				res.add(nm);
 			}
 		}
 		String[] resArray = new String[res.size()];
 		res.toArray(resArray);
 		return resArray;
-	}
-
-	/**
-	 * Find the index of a given string, within an array of strings
-	 * @param list is the array of strings
-	 * @param value is the given string to find
-	 * @return the index of the given string within the array, or -1 if it isn't present
-	 */
-	private static int findStringIndex(ArrayList<String> list, String value) {
-		for (int i = 0; i < list.size(); ++i) {
-			if (list.get(i).equals(value)) {
-				return i;
-			}
-		}
-		return -1;
 	}
 
 	/**
@@ -214,17 +229,13 @@ public class ForceUnionAction extends AbstractDecompilerAction {
 	 * @return the index of the selected field or -1 if "no field" was selected
 	 */
 	private boolean selectFieldNumber(String defaultFieldName) {
-		int size = 0;
-		if (!(parentDt instanceof Pointer)) {
-			size = accessVn.getSize();
-		}
 		ArrayList<String> allFields = new ArrayList<>();
-		String[] choices = buildFieldOptions(allFields, size);
+		String[] choices = buildFieldOptions(allFields);
 		if (choices.length < 2) {	// If only one field fits the Varnode
 			OkDialog.show("No Field Choices", "Only one field fits the selected variable");
 			return false;
 		}
-		int currentChoice = findStringIndex(allFields, defaultFieldName);
+		int currentChoice = allFields.indexOf(defaultFieldName);
 		if (currentChoice < 0) {
 			defaultFieldName = null;
 		}
@@ -234,7 +245,7 @@ public class ForceUnionAction extends AbstractDecompilerAction {
 		if (userChoice == null) {
 			return false;		// User cancelled when making the choice
 		}
-		fieldNumber = findStringIndex(allFields, userChoice);
+		fieldNumber = allFields.indexOf(userChoice);
 		if (fieldNumber < 0 || fieldNumber == currentChoice) {
 			return false;	// User chose original value or something not in list, treat as cancel
 		}

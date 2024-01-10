@@ -17,8 +17,10 @@ package ghidra.framework.model;
 
 import java.io.File;
 import java.io.IOException;
-import java.util.*;
+import java.util.List;
+import java.util.Map;
 
+import ghidra.framework.data.DomainObjectFileListener;
 import ghidra.framework.options.Options;
 import ghidra.util.ReadOnlyException;
 import ghidra.util.exception.CancelledException;
@@ -165,6 +167,22 @@ public interface DomainObject {
 	public void removeCloseListener(DomainObjectClosedListener listener);
 
 	/**
+	 * Adds a listener that will be notified when this DomainFile associated with this
+	 * DomainObject changes, such as when a 'Save As' action occurs. Unlike DomainObject events,
+	 * these notifications are not buffered and happen immediately when the DomainFile is changed.
+	 *
+	 * @param listener the listener to be notified when the associated DomainFile changes
+	 */
+	public void addDomainFileListener(DomainObjectFileListener listener);
+
+	/**
+	 * Removes the given DomainObjectFileListener listener.
+	 *
+	 * @param listener the listener to remove.
+	 */
+	public void removeDomainFileListener(DomainObjectFileListener listener);
+
+	/**
 	 * Creates a private event queue that can be flushed independently from the main event queue.
 	 * @param listener the listener to be notified of domain object events.
 	 * @param maxDelay the time interval (in milliseconds) used to buffer events.
@@ -216,7 +234,7 @@ public interface DomainObject {
 	 * Returns the list of consumers on this domainObject
 	 * @return the list of consumers.
 	 */
-	public ArrayList<Object> getConsumerList();
+	public List<Object> getConsumerList();
 
 	/**
 	 * Returns true if the given consumer is using (has open) this domain object.
@@ -284,8 +302,10 @@ public interface DomainObject {
 	public boolean lock(String reason);
 
 	/**
-	 * Cancels any previous lock and acquires it.
-	 * @param rollback if true, any changes in made with the previous lock should be discarded.
+	 * Force transaction lock and terminate current transaction.
+	 * @param rollback true if rollback of non-commited changes should occurs, false if commit
+	 * should be done.  NOTE: it can be potentially detrimental to commit an incomplete transaction
+	 * which should be avoided.
 	 * @param reason very short reason for requesting lock
 	 */
 	public void forceLock(boolean rollback, String reason);

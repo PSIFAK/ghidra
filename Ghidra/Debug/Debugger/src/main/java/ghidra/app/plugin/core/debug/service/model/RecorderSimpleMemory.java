@@ -21,9 +21,9 @@ import java.util.TreeMap;
 import java.util.concurrent.CompletableFuture;
 import java.util.function.Predicate;
 
-import ghidra.app.plugin.core.debug.mapping.DebuggerMemoryMapper;
 import ghidra.app.plugin.core.debug.service.model.interfaces.AbstractRecorderMemory;
 import ghidra.dbg.target.*;
+import ghidra.debug.api.model.DebuggerMemoryMapper;
 import ghidra.program.model.address.*;
 
 public class RecorderSimpleMemory implements AbstractRecorderMemory {
@@ -38,12 +38,30 @@ public class RecorderSimpleMemory implements AbstractRecorderMemory {
 	}
 
 	@Override
+	public void addMemory(TargetMemory memory) {
+		synchronized (this) {
+			if (this.memory == null) {
+				this.memory = memory;
+			}
+		}
+	}
+
+	@Override
 	public void addRegion(TargetMemoryRegion region, TargetMemory memory) {
 		synchronized (this) {
 			if (this.memory == null) {
 				this.memory = memory;
 			}
 			byMin.put(region.getRange().getMinAddress(), region);
+		}
+	}
+
+	@Override
+	public void removeMemory(TargetMemory invalid) {
+		synchronized (this) {
+			if (this.memory == invalid) {
+				this.memory = null;
+			}
 		}
 	}
 
@@ -87,7 +105,11 @@ public class RecorderSimpleMemory implements AbstractRecorderMemory {
 			AddressSet accessible = new AddressSet();
 			if (memMapper != null) {
 				for (Entry<Address, TargetMemoryRegion> ent : byMin.entrySet()) {
-					accessible.add(memMapper.targetToTrace(ent.getValue().getRange()));
+					AddressRange traceRange =
+						memMapper.targetToTraceTruncated(ent.getValue().getRange());
+					if (traceRange != null) {
+						accessible.add(traceRange);
+					}
 				}
 			}
 			return accessible;

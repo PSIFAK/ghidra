@@ -22,10 +22,13 @@ import org.apache.commons.lang3.StringUtils;
 import ghidra.app.util.bin.format.elf.*;
 import ghidra.app.util.importer.MessageLog;
 import ghidra.program.model.address.Address;
-import ghidra.program.model.data.*;
+import ghidra.program.model.data.DataUtilities;
 import ghidra.program.model.data.DataUtilities.ClearDataMode;
+import ghidra.program.model.data.PointerTypedef;
 import ghidra.program.model.listing.*;
 import ghidra.program.model.mem.MemoryAccessException;
+import ghidra.program.model.mem.MemoryBlock;
+import ghidra.program.model.reloc.RelocationResult;
 import ghidra.program.model.util.CodeUnitInsertionException;
 import ghidra.util.Msg;
 import ghidra.util.classfinder.ExtensionPoint;
@@ -36,6 +39,12 @@ import ghidra.util.exception.NotFoundException;
  * ELF relocation handlers.  
  */
 abstract public class ElfRelocationHandler implements ExtensionPoint {
+
+	/**
+	 * Fabricated Global Offset Table (GOT) name/prefix to be used when processing an object module
+	 * and a GOT must be fabricated to allow relocation processing.
+	 */
+	public static final String GOT_BLOCK_NAME = "%got";
 
 	abstract public boolean canRelocate(ElfHeader elf);
 
@@ -54,12 +63,11 @@ abstract public class ElfRelocationHandler implements ExtensionPoint {
 	 * Relocation context for a specific Elf image and relocation table.  The relocation context
 	 * is used to process relocations and manage any data required to process relocations.
 	 * @param loadHelper Elf load helper
-	 * @param relocationTable Elf relocation table
 	 * @param symbolMap Elf symbol placement map
 	 * @return relocation context or null if unsupported
 	 */
 	public ElfRelocationContext createRelocationContext(ElfLoadHelper loadHelper,
-			ElfRelocationTable relocationTable, Map<ElfSymbol, Address> symbolMap) {
+			Map<ElfSymbol, Address> symbolMap) {
 		return null;
 	}
 
@@ -68,29 +76,36 @@ abstract public class ElfRelocationHandler implements ExtensionPoint {
 	 * @param elfRelocationContext relocation context
 	 * @param relocation ELF relocation
 	 * @param relocationAddress relocation target address (fixup location)
+	 * @return applied relocation result (conveys status and applied byte-length)
 	 * @throws MemoryAccessException memory access failure
 	 * @throws NotFoundException required relocation data not found
 	 */
-	abstract public void relocate(ElfRelocationContext elfRelocationContext,
+	abstract public RelocationResult relocate(ElfRelocationContext elfRelocationContext,
 			ElfRelocation relocation, Address relocationAddress)
 			throws MemoryAccessException, NotFoundException;
 
 	/**
-	 * Apply a pointer-typedef with a specified component-offset.
-	 * @param program
+	 * Apply a pointer-typedef with a specified component-offset if specified address
+	 * is not contained within an execute block.
+	 * @param program program
 	 * @param addr address where data should be applied
 	 * @param componentOffset component offset
 	 */
 	public static void applyComponentOffsetPointer(Program program, Address addr,
 			long componentOffset) {
-		// TODO: we could also assign non-default address space setting if needed
+
+		MemoryBlock block = program.getMemory().getBlock(addr);
+		if (block == null || block.isExecute()) {
+			return; // avoid pointer creation where instruction may reside
+		}
+
 		PointerTypedef dt =
 			new PointerTypedef(null, null, -1, program.getDataTypeManager(), componentOffset);
 		try {
-			DataUtilities.createData(program, addr, dt, -1, false,
+			DataUtilities.createData(program, addr, dt, -1,
 				ClearDataMode.CLEAR_ALL_UNDEFINED_CONFLICT_DATA);
 		}
-		catch (CodeUnitInsertionException | DataTypeConflictException e) {
+		catch (CodeUnitInsertionException e) {
 			Msg.error(ElfRelocationHandler.class,
 				"Failed to apply component-offset pointer at " + addr);
 		}
@@ -99,10 +114,11 @@ abstract public class ElfRelocationHandler implements ExtensionPoint {
 	/**
 	 * Determine if symbolAddr is contained within the EXTERNAL block with a non-zero adjustment.  
 	 * If so, relocationAddress will be marked with a <code>EXTERNAL Data Elf Relocation with pointer-offset</code> 
-	 * warning bookmark.
+	 * warning or error bookmark.  Bookmark and logged message will be conveyed as an error if 
+	 * relocationAddress resides within an executable memory block.
 	 * NOTE: This method should only be invoked when the symbol offset will be adjusted with a non-zero 
 	 * value (i.e., addend).
-	 * @param program
+	 * @param program program
 	 * @param relocationAddress relocation address to be bookmarked if EXTERNAL block relocation
 	 * @param symbolAddr symbol address correspondng to relocation (may be null)
 	 * @param symbolName symbol name (may not be null if symbolAddr is not null)
@@ -118,6 +134,10 @@ abstract public class ElfRelocationHandler implements ExtensionPoint {
 			return;
 		}
 
+		MemoryBlock block = program.getMemory().getBlock(relocationAddress);
+
+		boolean showAsError = block == null || block.isExecute();
+
 		String sign = "+";
 		if (adjustment < 0) {
 			adjustment = -adjustment;
@@ -125,20 +145,28 @@ abstract public class ElfRelocationHandler implements ExtensionPoint {
 		}
 		String adjStr = sign + "0x" + Long.toHexString(adjustment);
 
-		symbolName = symbolName == null ? "<no name>" : symbolName;
-		Msg.warn(ElfRelocationHandler.class,
-			"EXTERNAL Data Elf Relocation with offset: at " + relocationAddress +
-			" (External Location = " + symbolName + adjStr + ")");
-		BookmarkManager bookmarkManager = program.getBookmarkManager();
-		bookmarkManager.setBookmark(relocationAddress, BookmarkType.WARNING, "EXTERNAL Relocation",
-			"EXTERNAL Data Elf Relocation with offset: External Location = " + symbolName +
-				adjStr);
+		symbolName = StringUtils.isEmpty(symbolName) ? ElfSymbol.FORMATTED_NO_NAME : symbolName;
+		String msg1 = "EXTERNAL Data Elf Relocation with offset: at " + relocationAddress +
+			" (External Location = " + symbolName + adjStr + ")";
+		if (showAsError) {
+			Msg.error(ElfRelocationHandler.class, msg1);
+		}
+		else {
+			Msg.warn(ElfRelocationHandler.class, msg1);
+		}
+		if (block != null) {
+			BookmarkManager bookmarkManager = program.getBookmarkManager();
+			bookmarkManager.setBookmark(relocationAddress, BookmarkType.WARNING,
+				"EXTERNAL Relocation",
+				"EXTERNAL Data Elf Relocation with offset: External Location = " + symbolName +
+					adjStr);
+		}
 	}
 
 	/**
 	 * Generate error log entry and bookmark at relocationAddress indicating 
 	 * an unhandled relocation.
-	 * @param program 
+	 * @param program program
 	 * @param relocationAddress relocation address to be bookmarked
 	 * @param type relocation type
 	 * @param symbolIndex associated symbol index within symbol table
@@ -148,7 +176,7 @@ abstract public class ElfRelocationHandler implements ExtensionPoint {
 	public static void markAsUnhandled(Program program, Address relocationAddress, long type,
 			long symbolIndex, String symbolName, MessageLog log) {
 
-		symbolName = StringUtils.isEmpty(symbolName) ? "<no name>" : symbolName;
+		symbolName = StringUtils.isEmpty(symbolName) ? ElfSymbol.FORMATTED_NO_NAME : symbolName;
 		log.appendMsg("Unhandled Elf Relocation: Type = " + type + " (0x" + Long.toHexString(type) +
 			") at " + relocationAddress + " (Symbol = " + symbolName + ")");
 		BookmarkManager bookmarkManager = program.getBookmarkManager();
@@ -161,7 +189,7 @@ abstract public class ElfRelocationHandler implements ExtensionPoint {
 	/**
 	 * Generate error log entry and bookmark at relocationAddress indicating 
 	 * an unsupported RELR relocation.
-	 * @param program 
+	 * @param program program
 	 * @param relocationAddress relocation address to be bookmarked
 	 */
 	public static void markAsUnsupportedRelr(Program program, Address relocationAddress) {
@@ -173,7 +201,7 @@ abstract public class ElfRelocationHandler implements ExtensionPoint {
 	/**
 	 * Generate error log entry and bookmark at relocationAddress where
 	 * import failed to transition block to initialized while processing relocation.
-	 * @param program 
+	 * @param program program
 	 * @param relocationAddress relocation address to be bookmarked
 	 * @param type relocation type
 	 * @param symbolIndex associated symbol index within symbol table
@@ -183,7 +211,7 @@ abstract public class ElfRelocationHandler implements ExtensionPoint {
 	public static void markAsUninitializedMemory(Program program, Address relocationAddress,
 			long type, long symbolIndex, String symbolName, MessageLog log) {
 
-		symbolName = symbolName == null ? "<no name>" : symbolName;
+		symbolName = StringUtils.isEmpty(symbolName) ? ElfSymbol.FORMATTED_NO_NAME : symbolName;
 		log.appendMsg("Unable to perform relocation: Type = " + type + " (0x" +
 			Long.toHexString(type) + ") at " + relocationAddress + " (Symbol = " + symbolName +
 			") - uninitialized memory");
@@ -198,10 +226,11 @@ abstract public class ElfRelocationHandler implements ExtensionPoint {
 	/**
 	 * Generate error log entry and bookmark at relocationAddress where
 	 * import failed to be applied.
-	 * @param program 
+	 * @param program program
 	 * @param relocationAddress relocation address to be bookmarked
 	 * @param type relocation type
 	 * @param symbolName associated symbol name
+	 * @param msg error messge
 	 * @param log import log
 	 */
 	public static void markAsError(Program program, Address relocationAddress, long type,
@@ -213,7 +242,7 @@ abstract public class ElfRelocationHandler implements ExtensionPoint {
 	/**
 	 * Generate error log entry and bookmark at relocationAddress where
 	 * import failed to be applied.
-	 * @param program 
+	 * @param program program
 	 * @param relocationAddress relocation address to be bookmarked
 	 * @param type relocation type
 	 * @param symbolName associated symbol name
@@ -223,7 +252,7 @@ abstract public class ElfRelocationHandler implements ExtensionPoint {
 	public static void markAsError(Program program, Address relocationAddress, String type,
 			String symbolName, String msg, MessageLog log) {
 
-		symbolName = symbolName == null ? "<no name>" : symbolName;
+		symbolName = StringUtils.isEmpty(symbolName) ? ElfSymbol.FORMATTED_NO_NAME : symbolName;
 		log.appendMsg("Elf Relocation Error: Type = " + type + " at " + relocationAddress +
 			", Symbol = " + symbolName + ": " + msg);
 		BookmarkManager bookmarkManager = program.getBookmarkManager();
@@ -234,7 +263,7 @@ abstract public class ElfRelocationHandler implements ExtensionPoint {
 	/**
 	 * Generate warning log entry and bookmark at relocationAddress where
 	 * import issue occurred.
-	 * @param program 
+	 * @param program program
 	 * @param relocationAddress relocation address to be bookmarked
 	 * @param type relocation type
 	 * @param msg message associated with warning
@@ -249,7 +278,7 @@ abstract public class ElfRelocationHandler implements ExtensionPoint {
 	/**
 	 * Generate warning log entry and bookmark at relocationAddress where
 	 * import issue occurred.
-	 * @param program 
+	 * @param program program
 	 * @param relocationAddress relocation address to be bookmarked
 	 * @param type relocation type
 	 * @param symbolName symbol name
@@ -260,7 +289,7 @@ abstract public class ElfRelocationHandler implements ExtensionPoint {
 	public static void markAsWarning(Program program, Address relocationAddress, String type,
 			String symbolName, long symbolIndex, String msg, MessageLog log) {
 		
-		symbolName = symbolName == null ? "<no name>" : symbolName;
+		symbolName = StringUtils.isEmpty(symbolName) ? ElfSymbol.FORMATTED_NO_NAME : symbolName;
 		log.appendMsg("Elf Relocation Warning: Type = " + type + " at " + relocationAddress +
 			", Symbol = " + symbolName + ": " + msg);
 		BookmarkManager bookmarkManager = program.getBookmarkManager();

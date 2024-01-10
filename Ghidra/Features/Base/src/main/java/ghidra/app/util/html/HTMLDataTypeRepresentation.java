@@ -288,31 +288,6 @@ public abstract class HTMLDataTypeRepresentation {
 		return newList;
 	}
 
-	/* Returns a data type that can later be located */
-	protected static DataType getLocatableDataType(DataType type) {
-
-		if (type instanceof DefaultDataType) {
-			return null; // special case; for some reason this type has a universal ID
-		}
-
-		UniversalID id = type.getUniversalID();
-		if (id == null) {
-			type = DataTypeUtils.getNamedBaseDataType(type);
-			id = type.getUniversalID();
-		}
-
-		if (id == null) {
-			return null;
-		}
-
-		DataTypeManager manager = type.getDataTypeManager();
-		if (manager == null) {
-			return null;
-		}
-
-		return type;
-	}
-
 	protected String originalHTMLData;
 
 	/** Default constructor for those who promise to later set the HTML text */
@@ -403,10 +378,13 @@ public abstract class HTMLDataTypeRepresentation {
 		if (length < 0) {
 			return new TextLine(" <i>Unsized</i>");
 		}
+
 		if (dataType.isZeroLength()) {
-			length = 0;
+			return new TextLine("0");
 		}
-		return new TextLine(Integer.toString(length));
+
+		return new TextLine(
+			Integer.toString(length) + " (" + NumericUtilities.toHexString(length) + ")");
 	}
 
 	private static boolean canLinkDataType(DataType dt) {

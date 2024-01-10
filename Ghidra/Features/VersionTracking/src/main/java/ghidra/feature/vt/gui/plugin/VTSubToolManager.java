@@ -84,7 +84,7 @@ public class VTSubToolManager implements VTControllerListener, OptionsChangeList
 			destinationTool = createTool(DESTINATION_TOOL_NAME, false);
 		}
 		ProgramManager service = destinationTool.getService(ProgramManager.class);
-		return service.openProgram(domainFile, parent);
+		return service.openProgram(domainFile);
 	}
 
 	Program openSourceProgram(DomainFile domainFile, Component parent) {
@@ -92,7 +92,7 @@ public class VTSubToolManager implements VTControllerListener, OptionsChangeList
 			sourceTool = createTool(SOURCE_TOOL_NAME, true);
 		}
 		ProgramManager service = sourceTool.getService(ProgramManager.class);
-		return service.openProgram(domainFile, parent);
+		return service.openProgram(domainFile);
 	}
 
 	void closeSourceProgram(Program source) {
@@ -336,8 +336,8 @@ public class VTSubToolManager implements VTControllerListener, OptionsChangeList
 		saveSubordinateToolConfig(sourceTool);
 		saveSubordinateToolConfig(destinationTool);
 		pluginList.clear();
-		sourceTool.exit();
-		destinationTool.exit();
+		PluginToolAccessUtils.dispose(sourceTool);
+		PluginToolAccessUtils.dispose(destinationTool);
 		sourceTool = null;
 		destinationTool = null;
 	}

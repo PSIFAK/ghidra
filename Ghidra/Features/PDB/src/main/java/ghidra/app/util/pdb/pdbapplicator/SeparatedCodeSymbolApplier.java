@@ -19,16 +19,16 @@ import java.util.ArrayList;
 import java.util.List;
 
 import ghidra.app.cmd.comments.SetCommentCmd;
+import ghidra.app.util.bin.format.pdb2.pdbreader.MsSymbolIterator;
 import ghidra.app.util.bin.format.pdb2.pdbreader.PdbException;
 import ghidra.app.util.bin.format.pdb2.pdbreader.symbol.SeparatedCodeFromCompilerSupportMsSymbol;
-import ghidra.app.util.pdb.pdbapplicator.SymbolGroup.AbstractMsSymbolIterator;
 import ghidra.program.model.address.Address;
 import ghidra.program.model.listing.CodeUnit;
 import ghidra.util.Msg;
 import ghidra.util.exception.CancelledException;
 
 /**
- * Applier for {@link SeparatedCodeFromCompilerSupportMsSymbol} symbol. 
+ * Applier for {@link SeparatedCodeFromCompilerSupportMsSymbol} symbol.
  */
 // TODO: Need to evaluate relationship to function symbols.
 // TODO: Need to create anonymous name for this as a function?
@@ -46,7 +46,7 @@ public class SeparatedCodeSymbolApplier extends MsSymbolApplier {
 
 	private List<MsSymbolApplier> allAppliers = new ArrayList<>();
 
-	private static AbstractMsSymbolIterator validateSymbol(AbstractMsSymbolIterator iter) {
+	private static MsSymbolIterator validateSymbol(MsSymbolIterator iter) {
 		if (!(iter.peek() instanceof SeparatedCodeFromCompilerSupportMsSymbol)) {
 			throw new IllegalArgumentException("Not a SeparatedCodeFromCompilerSupportMsSymbol");
 		}
@@ -55,12 +55,12 @@ public class SeparatedCodeSymbolApplier extends MsSymbolApplier {
 
 	/**
 	 * Constructor
-	 * @param applicator the {@link PdbApplicator} for which we are working.
+	 * @param applicator the {@link DefaultPdbApplicator} for which we are working.
 	 * @param iter the Iterator containing the symbol sequence being processed
 	 * @throws CancelledException upon user cancellation
 	 */
-	public SeparatedCodeSymbolApplier(PdbApplicator applicator, AbstractMsSymbolIterator iter)
-			throws CancelledException {
+	public SeparatedCodeSymbolApplier(DefaultPdbApplicator applicator,
+			MsSymbolIterator iter) throws CancelledException {
 		super(applicator, validateSymbol(iter));
 
 		symbol = (SeparatedCodeFromCompilerSupportMsSymbol) iter.next();
@@ -78,7 +78,7 @@ public class SeparatedCodeSymbolApplier extends MsSymbolApplier {
 		manageBlockNesting(this);
 
 		while (notDone()) {
-			applicator.checkCanceled();
+			applicator.checkCancelled();
 			MsSymbolApplier applier = applicator.getSymbolApplier(iter);
 			if (!(applier instanceof EndSymbolApplier)) {
 				Msg.info(this, "Unexpected applier in " + getClass().getSimpleName() + ": " +
@@ -111,8 +111,10 @@ public class SeparatedCodeSymbolApplier extends MsSymbolApplier {
 
 	private void setComments(boolean enabled) {
 		if (enabled) {
-			String existingComment = applicator.getProgram().getListing().getComment(
-				CodeUnit.PRE_COMMENT, specifiedAddress);
+			String existingComment = applicator.getProgram()
+					.getListing()
+					.getComment(
+						CodeUnit.PRE_COMMENT, specifiedAddress);
 			String p = "*************************************************************\n";
 			String newComment =
 				String.format(p + "* Separated code (from the compiler): %s - %s *\n" + p,

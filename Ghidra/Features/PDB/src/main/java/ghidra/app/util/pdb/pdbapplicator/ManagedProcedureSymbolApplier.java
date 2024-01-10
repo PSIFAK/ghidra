@@ -17,9 +17,8 @@ package ghidra.app.util.pdb.pdbapplicator;
 
 import java.util.*;
 
-import ghidra.app.cmd.disassemble.DisassembleCommand;
 import ghidra.app.cmd.function.CallDepthChangeInfo;
-import ghidra.app.cmd.function.CreateFunctionCmd;
+import ghidra.app.util.bin.format.pdb2.pdbreader.MsSymbolIterator;
 import ghidra.app.util.bin.format.pdb2.pdbreader.PdbException;
 import ghidra.app.util.bin.format.pdb2.pdbreader.symbol.AbstractManagedProcedureMsSymbol;
 import ghidra.app.util.bin.format.pdb2.pdbreader.symbol.AbstractMsSymbol;
@@ -28,7 +27,6 @@ import ghidra.app.util.bin.format.pe.cli.tables.CliTableMethodDef.CliMethodDefRo
 import ghidra.app.util.bin.format.pe.cli.tables.CliTableMethodImpl.CliMethodImplRow;
 import ghidra.app.util.bin.format.pe.cli.tables.CliTableMethodSemantics.CliMethodSemanticsRow;
 import ghidra.app.util.bin.format.pe.cli.tables.CliTableMethodSpec.CliMethodSpecRow;
-import ghidra.app.util.pdb.pdbapplicator.SymbolGroup.AbstractMsSymbolIterator;
 import ghidra.program.model.address.Address;
 import ghidra.program.model.address.AddressSet;
 import ghidra.program.model.data.DataType;
@@ -50,7 +48,8 @@ import ghidra.util.task.TaskMonitor;
 /**
  * Applier for {@link AbstractManagedProcedureMsSymbol} symbols.
  */
-public class ManagedProcedureSymbolApplier extends MsSymbolApplier {
+public class ManagedProcedureSymbolApplier extends MsSymbolApplier
+		implements DeferrableFunctionSymbolApplier {
 
 	private static final String BLOCK_INDENT = "   ";
 
@@ -58,6 +57,7 @@ public class ManagedProcedureSymbolApplier extends MsSymbolApplier {
 
 	private Address specifiedAddress;
 	private Address address;
+	private boolean isNonReturning;
 	private Function function = null;
 	private long specifiedFrameSize = 0;
 	private long currentFrameSize = 0;
@@ -76,11 +76,11 @@ public class ManagedProcedureSymbolApplier extends MsSymbolApplier {
 
 	/**
 	 * Constructor
-	 * @param applicator the {@link PdbApplicator} for which we are working.
+	 * @param applicator the {@link DefaultPdbApplicator} for which we are working.
 	 * @param iter the Iterator containing the symbol sequence being processed
 	 * @throws CancelledException upon user cancellation
 	 */
-	public ManagedProcedureSymbolApplier(PdbApplicator applicator, AbstractMsSymbolIterator iter)
+	public ManagedProcedureSymbolApplier(DefaultPdbApplicator applicator, MsSymbolIterator iter)
 			throws CancelledException {
 		super(applicator, iter);
 		AbstractMsSymbol abstractSymbol = iter.next();
@@ -98,11 +98,12 @@ public class ManagedProcedureSymbolApplier extends MsSymbolApplier {
 		procedureSymbol = (AbstractManagedProcedureMsSymbol) abstractSymbol;
 		specifiedAddress = applicator.getRawAddress(procedureSymbol);
 		address = applicator.getAddress(procedureSymbol);
+		isNonReturning = procedureSymbol.getFlags().doesNotReturn();
 
 		manageBlockNesting(this);
 
 		while (notDone()) {
-			applicator.checkCanceled();
+			applicator.checkCancelled();
 			MsSymbolApplier applier = applicator.getSymbolApplier(iter);
 			allAppliers.add(applier);
 			applier.manageBlockNesting(this);
@@ -240,49 +241,22 @@ public class ManagedProcedureSymbolApplier extends MsSymbolApplier {
 	}
 
 	private boolean applyFunction(TaskMonitor monitor) {
-		Listing listing = applicator.getProgram().getListing();
 
 		applicator.createSymbol(address, getName(), true);
 
-		function = listing.getFunctionAt(address);
-		if (function == null) {
-			function = createFunction(monitor);
-		}
-		if (function != null && !function.isThunk() &&
-			(function.getSignatureSource() == SourceType.DEFAULT ||
-				function.getSignatureSource() == SourceType.ANALYSIS)) {
-			// Set the function definition
-			setFunctionDefinition(monitor);
-
-		}
+		function = applicator.getExistingOrCreateOneByteFunction(address);
 		if (function == null) {
 			return false;
 		}
+		applicator.scheduleDeferredFunctionWork(this);
 
+		if (!function.isThunk() &&
+			function.getSignatureSource().isLowerPriorityThan(SourceType.IMPORTED)) {
+			setFunctionDefinition(monitor);
+			function.setNoReturn(isNonReturning);
+		}
 		currentFrameSize = 0;
 		return true;
-	}
-
-	private Function createFunction(TaskMonitor monitor) {
-
-		// Does function already exist?
-		Function myFunction = applicator.getProgram().getListing().getFunctionAt(address);
-		if (myFunction != null) {
-			// Actually not sure if we should set to 0 or calculate from the function here.
-			// Need to investigate more, so at least keeping it as a separate 'else' for now.
-			return myFunction;
-		}
-
-		// Disassemble
-		Instruction instr = applicator.getProgram().getListing().getInstructionAt(address);
-		if (instr == null) {
-			DisassembleCommand cmd = new DisassembleCommand(address, null, true);
-			cmd.applyTo(applicator.getProgram(), monitor);
-		}
-
-		myFunction = createFunctionCommand(monitor);
-
-		return myFunction;
 	}
 
 	private boolean setFunctionDefinition(TaskMonitor monitor) {
@@ -362,16 +336,6 @@ public class ManagedProcedureSymbolApplier extends MsSymbolApplier {
 //			}
 //		}
 		return true;
-	}
-
-	private Function createFunctionCommand(TaskMonitor monitor) {
-		CreateFunctionCmd funCmd = new CreateFunctionCmd(address);
-		if (!funCmd.applyTo(applicator.getProgram(), monitor)) {
-			applicator.appendLogMsg("Failed to apply function at address " + address.toString() +
-				"; attempting to use possible existing function");
-			return applicator.getProgram().getListing().getFunctionAt(address);
-		}
-		return funCmd.getFunction();
 	}
 
 	private boolean notDone() {
@@ -455,7 +419,7 @@ public class ManagedProcedureSymbolApplier extends MsSymbolApplier {
 			function.getProgram().getListing().getInstructions(scopeSet, true);
 		int max = 0;
 		while (instructions.hasNext()) {
-			monitor.checkCanceled();
+			monitor.checkCancelled();
 			Instruction next = instructions.next();
 			int newValue = valueChange.getDepth(next.getMinAddress());
 			if (newValue < -(20 * 1024) || newValue > (20 * 1024)) {
@@ -493,7 +457,7 @@ public class ManagedProcedureSymbolApplier extends MsSymbolApplier {
 			return new CallDepthChangeInfo(function, scopeSet, frameReg, monitor);
 		}
 
-		Integer getRegChange(PdbApplicator applicator, Register register) {
+		Integer getRegChange(DefaultPdbApplicator applicator, Register register) {
 			if (callDepthChangeInfo == null || register == null) {
 				return null;
 			}
@@ -506,5 +470,16 @@ public class ManagedProcedureSymbolApplier extends MsSymbolApplier {
 			return change;
 		}
 
+	}
+
+	@Override
+	public void doDeferredProcessing() {
+		// TODO:
+		// Try to processes parameters, locals, scopes if applicable.
+	}
+
+	@Override
+	public Address getAddress() {
+		return address;
 	}
 }

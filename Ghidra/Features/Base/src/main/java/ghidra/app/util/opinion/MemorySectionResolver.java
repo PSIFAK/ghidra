@@ -35,6 +35,7 @@ public abstract class MemorySectionResolver {
 	protected final Program program;
 
 	private Set<String> usedBlockNames = new HashSet<>();
+	private AddressSet physicalLoadedOverlaySet;
 
 	private List<MemorySection> sections = new ArrayList<>(); // built-up prior to resolve
 	private Map<String, Integer> sectionIndexMap = new HashMap<>();
@@ -267,11 +268,21 @@ public abstract class MemorySectionResolver {
 		// build-up mapping of sections to a sequence of memory ranges
 		sectionMemoryMap = new HashMap<>();
 
+		physicalLoadedOverlaySet = new AddressSet();
+		for (MemoryBlock block : getMemory().getBlocks()) {
+			Address minAddr = block.getStart();
+			Address maxAddr = block.getEnd();
+			if (minAddr.isLoadedMemoryAddress() && minAddr.getAddressSpace().isOverlaySpace()) {
+				physicalLoadedOverlaySet.add(minAddr.getPhysicalAddress(),
+					maxAddr.getPhysicalAddress());
+			}
+		}
+
 		// process sections in reverse order - last-in takes precedence
 		int sectionCount = sections.size();
 		monitor.initialize(sectionCount);
 		for (int index = sectionCount - 1; index >= 0; --index) {
-			monitor.checkCanceled();
+			monitor.checkCancelled();
 			resolveSectionMemory(sections.get(index), fileAllocationMap, monitor);
 			monitor.incrementProgress(1);
 		}
@@ -342,7 +353,7 @@ public abstract class MemorySectionResolver {
 		// NOTE: Allocated address ranges may refer to overlay memory address
 		for (AddressRange allocatedAddrRange : memoryAllocationList) {
 
-			monitor.checkCanceled();
+			monitor.checkCancelled();
 
 			// Generate block name rangeIndex suffix if section sliced-up
 			Integer rangeIndex = sectionIndexMap.get(section.sectionName);
@@ -390,6 +401,10 @@ public abstract class MemorySectionResolver {
 					minAddr = block.getStart();
 					maxAddr = block.getEnd();
 					usedBlockNames.add(blockName);
+					if (block.isOverlay() && minAddr.isLoadedMemoryAddress()) {
+						physicalLoadedOverlaySet.add(minAddr.getPhysicalAddress(),
+							maxAddr.getPhysicalAddress());
+					}
 				}
 				else {
 					// block may be null due to unexpected conflict or pruning - allow to continue
@@ -437,19 +452,10 @@ public abstract class MemorySectionResolver {
 		}
 
 		// Get base memory conflict set
-		Memory memory = getMemory();
-		AddressSet rangeSet = new AddressSet(rangeMin, rangeMax);
-		AddressSet conflictSet = memory.intersect(rangeSet);
-
-		// Add in loaded overlay conflicts (use their physical address)
-		for (MemoryBlock block : memory.getBlocks()) {
-			Address minAddr = block.getStart();
-			Address maxAddr = block.getEnd();
-			if (minAddr.isLoadedMemoryAddress() && minAddr.getAddressSpace().isOverlaySpace()) {
-				AddressSet intersection = rangeSet.intersectRange(minAddr.getPhysicalAddress(),
-					maxAddr.getPhysicalAddress());
-				conflictSet.add(intersection);
-			}
+		AddressSet conflictSet = getMemory().intersectRange(rangeMin, rangeMax);
+		if (!physicalLoadedOverlaySet.isEmpty()) {
+			// Add in loaded overlay physical address conflicts
+			conflictSet.add(physicalLoadedOverlaySet.intersectRange(rangeMin, rangeMax));
 		}
 
 		return conflictSet;
@@ -510,7 +516,7 @@ public abstract class MemorySectionResolver {
 		try {
 			long fileOffset = section.getFileOffset(); // only used for initialized sections
 			for (AddressRange physicalAddrRange : physicalConflictAddrSet.getAddressRanges()) {
-				monitor.checkCanceled();
+				monitor.checkCancelled();
 
 				Address physicalRangeMinAddr = physicalAddrRange.getMinAddress();
 				Address physicalRangeMaxAddr = physicalAddrRange.getMaxAddress();

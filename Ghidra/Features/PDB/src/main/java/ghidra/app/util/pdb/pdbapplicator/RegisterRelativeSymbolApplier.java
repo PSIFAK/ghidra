@@ -17,10 +17,11 @@ package ghidra.app.util.pdb.pdbapplicator;
 
 import java.util.Objects;
 
+import ghidra.app.util.bin.format.pdb2.pdbreader.MsSymbolIterator;
 import ghidra.app.util.bin.format.pdb2.pdbreader.PdbException;
+import ghidra.app.util.bin.format.pdb2.pdbreader.RecordNumber;
 import ghidra.app.util.bin.format.pdb2.pdbreader.symbol.AbstractMsSymbol;
 import ghidra.app.util.bin.format.pdb2.pdbreader.symbol.AbstractRegisterRelativeAddressMsSymbol;
-import ghidra.app.util.pdb.pdbapplicator.SymbolGroup.AbstractMsSymbolIterator;
 import ghidra.program.model.data.DataType;
 import ghidra.program.model.lang.Register;
 import ghidra.program.model.listing.*;
@@ -36,10 +37,11 @@ public class RegisterRelativeSymbolApplier extends MsSymbolApplier {
 
 	/**
 	 * Constructor
-	 * @param applicator the {@link PdbApplicator} for which we are working.
+	 * @param applicator the {@link DefaultPdbApplicator} for which we are working.
 	 * @param iter the Iterator containing the symbol sequence being processed
 	 */
-	public RegisterRelativeSymbolApplier(PdbApplicator applicator, AbstractMsSymbolIterator iter) {
+	public RegisterRelativeSymbolApplier(DefaultPdbApplicator applicator,
+			MsSymbolIterator iter) {
 		super(applicator, iter);
 		AbstractMsSymbol abstractSymbol = iter.next();
 		if (!(abstractSymbol instanceof AbstractRegisterRelativeAddressMsSymbol)) {
@@ -66,7 +68,8 @@ public class RegisterRelativeSymbolApplier extends MsSymbolApplier {
 		}
 	}
 
-	private boolean createFunctionVariable(FunctionSymbolApplier applier) {
+	private boolean createFunctionVariable(FunctionSymbolApplier applier)
+			throws CancelledException, PdbException {
 		Objects.requireNonNull(applier, "FunctionSymbolApplier cannot be null");
 		Function function = applier.getFunction();
 
@@ -104,9 +107,8 @@ public class RegisterRelativeSymbolApplier extends MsSymbolApplier {
 //		}
 		int offset = (int) (relativeOffset & 0xffffffffL);
 
-		MsTypeApplier dataTypeApplier =
-			applicator.getTypeApplier(symbol.getTypeRecordNumber());
-		DataType dt = dataTypeApplier.getDataType();
+		RecordNumber typeRecord = symbol.getTypeRecordNumber();
+		DataType dt = applicator.getCompletedDataType(typeRecord);
 		if (dt != null) {
 //			Variable m16 = stackFrame.getVariableContaining(-16);
 //			Variable m8 = stackFrame.getVariableContaining(-8);

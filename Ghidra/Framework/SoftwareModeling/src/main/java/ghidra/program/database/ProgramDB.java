@@ -19,6 +19,8 @@ import java.io.IOException;
 import java.math.BigInteger;
 import java.util.*;
 
+import org.apache.commons.lang3.StringUtils;
+
 import db.DBConstants;
 import db.DBHandle;
 import ghidra.app.plugin.processors.sleigh.SleighLanguage;
@@ -34,7 +36,6 @@ import ghidra.program.database.code.InstructionDB;
 import ghidra.program.database.data.ProgramDataTypeManager;
 import ghidra.program.database.external.ExternalManagerDB;
 import ghidra.program.database.function.FunctionManagerDB;
-import ghidra.program.database.map.AddressMap;
 import ghidra.program.database.map.AddressMapDB;
 import ghidra.program.database.mem.MemoryMapDB;
 import ghidra.program.database.module.TreeManager;
@@ -46,10 +47,10 @@ import ghidra.program.database.reloc.RelocationManager;
 import ghidra.program.database.symbol.*;
 import ghidra.program.database.util.AddressSetPropertyMapDB;
 import ghidra.program.model.address.*;
+import ghidra.program.model.data.CategoryPath;
 import ghidra.program.model.lang.*;
 import ghidra.program.model.listing.*;
 import ghidra.program.model.mem.MemoryBlock;
-import ghidra.program.model.mem.MemoryConflictException;
 import ghidra.program.model.pcode.Varnode;
 import ghidra.program.model.symbol.*;
 import ghidra.program.model.util.AddressSetPropertyMap;
@@ -104,9 +105,15 @@ public class ProgramDB extends DomainObjectAdapterDB implements Program, ChangeM
 	 *                            TypeDefSettingsDefinition.  Added DataTypeManager versioning 
 	 *                            support.  Added support for auto-named TypeDef datatypes.
 	 *                            Transitioned string data translation storage to use address-based 
-	 *                            property map (StringTranslations).   
+	 *                            property map (StringTranslations).
+	 * 19-Jan-2023 - version 26   Improved relocation data records to incorporate status and 
+	 *                            byte-length when original FileBytes should be used.
+	 * 10-Jul-2023 - version 27   Add support for Instruction length override which utilizes
+	 *                            unused flag bits.
+	 * 19-Oct-2023 - version 28   Revised overlay address space table and eliminated min/max.
+	 *                            Multiple blocks are permitted within a single overlay space.
 	 */
-	static final int DB_VERSION = 25;
+	static final int DB_VERSION = 28;
 
 	/**
 	 * UPGRADE_REQUIRED_BFORE_VERSION should be changed to DB_VERSION anytime the
@@ -126,6 +133,7 @@ public class ProgramDB extends DomainObjectAdapterDB implements Program, ChangeM
 	public static final int EXTERNAL_FUNCTIONS_ADDED_VERSION = 17;
 	public static final int COMPOUND_VARIABLE_STORAGE_ADDED_VERSION = 18;
 	public static final int AUTO_PARAMETERS_ADDED_VERSION = 19;
+	public static final int RELOCATION_STATUS_ADDED_VERSION = 26;
 
 	private static final String DATA_MAP_TABLE_NAME = "Program";
 
@@ -200,14 +208,19 @@ public class ProgramDB extends DomainObjectAdapterDB implements Program, ChangeM
 	private int languageMinorVersion;
 	private LanguageTranslator languageUpgradeTranslator;
 
-	private Address storedImageBase; // current image base maintained by addrMap
 	private boolean imageBaseOverride = false;
+	private Address effectiveImageBase = null;
 	private boolean recordChanges;
 
-	private OverlaySpaceAdapterDB overlaySpaceAdapter;
+	private OverlaySpaceDBAdapter overlaySpaceAdapter;
 
 	private Map<String, AddressSetPropertyMapDB> addrSetPropertyMap = new HashMap<>();
 	private Map<String, IntRangeMapDB> intRangePropertyMap = new HashMap<>();
+
+	// cached program information properties
+	private static final String PREFERRED_ROOT_NAMESPACE_CATEGORY_PROPERTY_PATHNAME =
+		PROGRAM_INFO + "." + PREFERRED_ROOT_NAMESPACE_CATEGORY_PROPERTY;
+	private CategoryPath preferredRootNamespaceCategory; // value of PREFERRED_ROOT_NAMESPACE_CATEGORY_PROPERTY
 
 	/**
 	 * Constructs a new ProgramDB
@@ -234,7 +247,8 @@ public class ProgramDB extends DomainObjectAdapterDB implements Program, ChangeM
 		languageVersion = language.getVersion();
 		languageMinorVersion = language.getMinorVersion();
 
-		addressFactory = new ProgramAddressFactory(language, compilerSpec);
+		addressFactory =
+			new ProgramAddressFactory(language, compilerSpec, s -> getDefinedAddressSet(s));
 
 		recordChanges = false;
 		boolean success = false;
@@ -248,7 +262,7 @@ public class ProgramDB extends DomainObjectAdapterDB implements Program, ChangeM
 			listing = new ListingDB();
 			changeSet = new ProgramDBChangeSet(addrMap, NUM_UNDOS);
 			initManagers(CREATE, TaskMonitor.DUMMY);
-			propertiesCreate();
+			createProgramInformationOptions();
 			programUserData = new ProgramUserDataDB(this);
 			endTransaction(id, true);
 			clearUndo(false);
@@ -327,7 +341,8 @@ public class ProgramDB extends DomainObjectAdapterDB implements Program, ChangeM
 
 			initCompilerSpec();
 
-			addressFactory = new ProgramAddressFactory(language, compilerSpec);
+			addressFactory =
+				new ProgramAddressFactory(language, compilerSpec, s -> getDefinedAddressSet(s));
 
 			VersionException versionExc = createManagers(openMode, monitor);
 			if (dbVersionExc != null) {
@@ -366,11 +381,13 @@ public class ProgramDB extends DomainObjectAdapterDB implements Program, ChangeM
 					}
 					languageUpgradeRequired = false;
 				}
+				addressFactory.invalidateOverlayCache();
 				postUpgrade(oldVersion, monitor);
 				changed = true;
 			}
 
-			propertiesRestore();
+			registerProgramInformationOptions();
+			restoreProgramInformationOptions();
 			recordChanges = true;
 			endTransaction(id, true);
 			clearUndo(false);
@@ -389,6 +406,14 @@ public class ProgramDB extends DomainObjectAdapterDB implements Program, ChangeM
 
 		// for tracking during testing
 		ProgramUtilities.addTrackedProgram(this);
+	}
+
+	private AddressSetView getDefinedAddressSet(AddressSpace s) {
+		MemoryMapDB memory = getMemory();
+		if (memory != null) {
+			return memory.intersectRange(s.getMinAddress(), s.getMaxAddress());
+		}
+		return null;
 	}
 
 	/**
@@ -434,25 +459,60 @@ public class ProgramDB extends DomainObjectAdapterDB implements Program, ChangeM
 		recordChanges = true;
 	}
 
-	private void propertiesRestore() {
+	private void registerProgramInformationOptions() {
 		Options pl = getOptions(PROGRAM_INFO);
-		boolean origChangeState = changed;
 		pl.registerOption(EXECUTABLE_PATH, UNKNOWN, null, "Original import path of program image");
 		pl.registerOption(EXECUTABLE_FORMAT, UNKNOWN, null, "Original program image format");
 		pl.registerOption(CREATED_WITH_GHIDRA_VERSION, "3.0 or earlier", null,
 			"Version of Ghidra used to create this program.");
 		pl.registerOption(DATE_CREATED, JANUARY_1_1970, null, "Date this program was created");
-		changed = origChangeState;
+		pl.registerOption(PREFERRED_ROOT_NAMESPACE_CATEGORY_PROPERTY, "", null,
+			"Preferred data type category path of root namespace");
 	}
 
-	private void propertiesCreate() {
+	private void createProgramInformationOptions() {
+		registerProgramInformationOptions();
 		Options pl = getOptions(PROGRAM_INFO);
-		boolean origChangeState = changed;
 		pl.setString(EXECUTABLE_PATH, UNKNOWN);
 		pl.setString(EXECUTABLE_FORMAT, UNKNOWN);
 		pl.setString(CREATED_WITH_GHIDRA_VERSION, Application.getApplicationVersion());
 		pl.setDate(DATE_CREATED, new Date());
-		changed = origChangeState;
+	}
+
+	private void restoreProgramInformationOptions() {
+		Options pl = getOptions(PROGRAM_INFO);
+		updatePreferredRootNamespaceCategory(
+			pl.getString(PREFERRED_ROOT_NAMESPACE_CATEGORY_PROPERTY, null));
+	}
+
+	@Override
+	protected boolean propertyChanged(String propertyName, Object oldValue, Object newValue) {
+		if (propertyName.equals(PREFERRED_ROOT_NAMESPACE_CATEGORY_PROPERTY_PATHNAME)) {
+			String path = (String) newValue;
+			if (!updatePreferredRootNamespaceCategory(path)) {
+				return false;
+			}
+		}
+		super.propertyChanged(propertyName, oldValue, newValue);
+		return true;
+	}
+
+	private boolean updatePreferredRootNamespaceCategory(String path) {
+		if (path != null) {
+			path = path.trim();
+		}
+		preferredRootNamespaceCategory = null;
+		if (!StringUtils.isBlank(path)) {
+			try {
+				preferredRootNamespaceCategory = new CategoryPath(path);
+			}
+			catch (Exception e) {
+				// ignore invalid path
+				Msg.error(this, "Ignoring invalid preferred root namespace category path: " + path);
+				return false;
+			}
+		}
+		return true;
 	}
 
 	void setProgramUserData(ProgramUserDataDB programUserData) {
@@ -557,7 +617,17 @@ public class ProgramDB extends DomainObjectAdapterDB implements Program, ChangeM
 	public void setCompiler(String compiler) {
 		Options pl = getOptions(PROGRAM_INFO);
 		pl.setString(COMPILER, compiler);
-		changed = true;
+	}
+
+	@Override
+	public CategoryPath getPreferredRootNamespaceCategoryPath() {
+		return preferredRootNamespaceCategory;
+	}
+
+	@Override
+	public void setPreferredRootNamespaceCategoryPath(String categoryPath) {
+		Options pl = getOptions(PROGRAM_INFO);
+		pl.setString(PREFERRED_ROOT_NAMESPACE_CATEGORY_PROPERTY, categoryPath);
 	}
 
 	@Override
@@ -572,7 +642,6 @@ public class ProgramDB extends DomainObjectAdapterDB implements Program, ChangeM
 	public void setExecutablePath(String path) {
 		Options pl = getOptions(PROGRAM_INFO);
 		pl.setString(EXECUTABLE_PATH, path);
-		changed = true;
 	}
 
 	@Override
@@ -592,7 +661,6 @@ public class ProgramDB extends DomainObjectAdapterDB implements Program, ChangeM
 	public void setExecutableFormat(String format) {
 		Options pl = getOptions(PROGRAM_INFO);
 		pl.setString(EXECUTABLE_FORMAT, format);
-		changed = true;
 	}
 
 	@Override
@@ -612,7 +680,6 @@ public class ProgramDB extends DomainObjectAdapterDB implements Program, ChangeM
 	public void setExecutableMD5(String md5) {
 		Options pl = getOptions(PROGRAM_INFO);
 		pl.setString(EXECUTABLE_MD5, md5);
-		changed = true;
 	}
 
 	@Override
@@ -632,7 +699,6 @@ public class ProgramDB extends DomainObjectAdapterDB implements Program, ChangeM
 	public void setExecutableSHA256(String sha256) {
 		Options pl = getOptions(PROGRAM_INFO);
 		pl.setString(EXECUTABLE_SHA256, sha256);
-		changed = true;
 	}
 
 	@Override
@@ -687,19 +753,19 @@ public class ProgramDB extends DomainObjectAdapterDB implements Program, ChangeM
 	}
 
 	@Override
-	public AddressFactory getAddressFactory() {
+	public ProgramAddressFactory getAddressFactory() {
 		return addressFactory;
 	}
 
 	/**
 	 * Returns this programs address map.
-	 * NOTE: This method has been dropped from the Program interface to help
-	 * discourage the use of the program's address map since bad assumptions 
+	 * NOTE: This method should be dropped from the {@link Program} interface to help
+	 * discourage the its use external to this implementation since bad assumptions 
 	 * are frequently made about address keys which may not be ordered or sequential
 	 * across an entire address space.
 	 */
 	@Override
-	public AddressMap getAddressMap() {
+	public AddressMapDB getAddressMap() {
 		return addrMap;
 	}
 
@@ -1119,7 +1185,7 @@ public class ProgramDB extends DomainObjectAdapterDB implements Program, ChangeM
 
 	private void refreshImageBase() throws IOException {
 		long baseOffset = getStoredBaseImageOffset();
-		storedImageBase = addressFactory.getDefaultAddressSpace().getAddress(baseOffset);
+		Address storedImageBase = addressFactory.getDefaultAddressSpace().getAddress(baseOffset);
 		if (!imageBaseOverride) {
 			Address currentImageBase = getImageBase();
 			if (!currentImageBase.equals(storedImageBase)) {
@@ -1129,33 +1195,29 @@ public class ProgramDB extends DomainObjectAdapterDB implements Program, ChangeM
 		}
 	}
 
-	/**
-	 * Create a new OverlayAddressSpace based upon the given overlay blockName and base AddressSpace
-	 * @param blockName the name of the overlay memory block which corresponds to the new overlay address
-	 * space to be created.  This name may be modified to produce a valid overlay space name and avoid 
-	 * duplication.
-	 * @param originalSpace the base AddressSpace to overlay	
-	 * @param minOffset the min offset of the space
-	 * @param maxOffset the max offset of the space
-	 * @return the new space
-	 * @throws LockException if the program is shared and not checked out exclusively.
-	 * @throws MemoryConflictException if image base override is active
-	 */
-	public AddressSpace addOverlaySpace(String blockName, AddressSpace originalSpace,
-			long minOffset, long maxOffset) throws LockException, MemoryConflictException {
+	@Override
+	public ProgramOverlayAddressSpace createOverlaySpace(String overlaySpaceName,
+			AddressSpace baseSpace) throws IllegalStateException, DuplicateNameException,
+			InvalidNameException, LockException {
 
 		checkExclusiveAccess();
-		if (imageBaseOverride) {
-			throw new MemoryConflictException(
-				"Overlay spaces may not be created while an image-base override is active");
+
+		if (!addressFactory.isValidOverlayBaseSpace(baseSpace)) {
+			throw new IllegalArgumentException(
+				"Invalid address space for overlay: " + baseSpace.getName());
 		}
 
-		OverlayAddressSpace ovSpace = null;
+		ProgramOverlayAddressSpace ovSpace = null;
 		lock.acquire();
 		try {
-			ovSpace = addressFactory.addOverlayAddressSpace(blockName, false, originalSpace,
-				minOffset, maxOffset);
-			overlaySpaceAdapter.addOverlaySpace(ovSpace);
+			if (imageBaseOverride) {
+				throw new IllegalStateException(
+					"Overlay spaces may not be created while an image-base override is active");
+			}
+			ovSpace =
+				overlaySpaceAdapter.createOverlaySpace(addressFactory, overlaySpaceName, baseSpace);
+
+			setChanged(ChangeManager.DOCR_OVERLAY_SPACE_ADDED, overlaySpaceName, null);
 		}
 		catch (IOException e) {
 			dbError(e);
@@ -1166,35 +1228,61 @@ public class ProgramDB extends DomainObjectAdapterDB implements Program, ChangeM
 		return ovSpace;
 	}
 
-	public void renameOverlaySpace(String oldOverlaySpaceName, String newName)
-			throws LockException {
-		checkExclusiveAccess();
-		String revisedName = addressFactory.renameOverlaySpace(oldOverlaySpaceName, newName);
-		if (!revisedName.equals(oldOverlaySpaceName)) {
-			try {
-				overlaySpaceAdapter.renameOverlaySpace(oldOverlaySpaceName, revisedName);
-				addrMap.renameOverlaySpace(oldOverlaySpaceName, revisedName);
-			}
-			catch (IOException e) {
-				dbError(e);
-			}
-		}
-	}
+	@Override
+	public void renameOverlaySpace(String overlaySpaceName, String newName)
+			throws NotFoundException, InvalidNameException, DuplicateNameException, LockException {
 
-	public boolean removeOverlaySpace(AddressSpace overlaySpace) throws LockException {
 		lock.acquire();
 		try {
 			checkExclusiveAccess();
-			MemoryBlock[] blocks = memoryManager.getBlocks();
-			for (MemoryBlock block : blocks) {
-				if (block.getStart().getAddressSpace().equals(overlaySpace)) {
-					return false;
-				}
+
+			AddressSpace space = addressFactory.getAddressSpace(overlaySpaceName);
+			if (space == null || !(space instanceof ProgramOverlayAddressSpace os)) {
+				throw new NotFoundException("Overlay " + overlaySpaceName + " not found");
 			}
-			addressFactory.removeOverlaySpace(overlaySpace.getName());
-			overlaySpaceAdapter.removeOverlaySpace(overlaySpace.getName());
-			addrMap.deleteOverlaySpace(overlaySpace.getName());
+
+			addressFactory.checkValidOverlaySpaceName(newName);
+
+			if (overlaySpaceAdapter.renameOverlaySpace(overlaySpaceName, newName)) {
+				os.setName(newName);
+				addressFactory.overlaySpaceRenamed(overlaySpaceName, newName, true);
+				addrMap.renameOverlaySpace(overlaySpaceName, newName);
+				clearCache(true);
+				setChanged(ChangeManager.DOCR_OVERLAY_SPACE_RENAMED, overlaySpaceName, newName);
+				fireEvent(new DomainObjectChangeRecord(DomainObject.DO_OBJECT_RESTORED));
+			}
+		}
+		catch (IOException e) {
+			dbError(e);
+		}
+		finally {
+			lock.release();
+		}
+	}
+
+	@Override
+	public boolean removeOverlaySpace(String overlaySpaceName)
+			throws LockException, NotFoundException {
+
+		lock.acquire();
+		try {
+			checkExclusiveAccess();
+
+			AddressSpace space = addressFactory.getAddressSpace(overlaySpaceName);
+			if (space == null || !(space instanceof ProgramOverlayAddressSpace os)) {
+				throw new NotFoundException("Overlay " + overlaySpaceName + " not found");
+			}
+
+			if (!os.getOverlayAddressSet().isEmpty()) {
+				return false; // memory blocks are still defined
+			}
+
+			addressFactory.removeOverlaySpace(overlaySpaceName);
+			overlaySpaceAdapter.removeOverlaySpace(overlaySpaceName);
+			addrMap.deleteOverlaySpace(overlaySpaceName);
 			clearCache(true);
+			setChanged(ChangeManager.DOCR_OVERLAY_SPACE_REMOVED, overlaySpaceName, null);
+			fireEvent(new DomainObjectChangeRecord(DomainObject.DO_OBJECT_RESTORED));
 			return true;
 		}
 		catch (IOException e) {
@@ -1216,7 +1304,16 @@ public class ProgramDB extends DomainObjectAdapterDB implements Program, ChangeM
 
 	@Override
 	public Address getImageBase() {
+		if (effectiveImageBase != null) {
+			return effectiveImageBase;
+		}
 		return addrMap.getImageBase();
+	}
+
+	// TODO: We need a more global solution for this.
+	@Deprecated
+	public void setEffectiveImageBase(Address imageBase) {
+		effectiveImageBase = imageBase;
 	}
 
 	@Override
@@ -1268,7 +1365,6 @@ public class ProgramDB extends DomainObjectAdapterDB implements Program, ChangeM
 			if (commit) {
 				try {
 					dataMap.put(IMAGE_OFFSET, Long.toHexString(base.getOffset()));
-					storedImageBase = base;
 					imageBaseOverride = false;
 
 					setChanged(ChangeManager.DOCR_IMAGE_BASE_CHANGED, oldBase, base);
@@ -1513,7 +1609,7 @@ public class ProgramDB extends DomainObjectAdapterDB implements Program, ChangeM
 			int cnt = 0;
 			for (Symbol functionSymbol : symbolTable.getSymbols(memoryManager, SymbolType.FUNCTION,
 				true)) {
-				monitor.checkCanceled();
+				monitor.checkCancelled();
 				ProgramUtilities.convertFunctionWrappedExternalPointer(functionSymbol);
 				monitor.setProgress(++cnt);
 			}
@@ -1527,9 +1623,27 @@ public class ProgramDB extends DomainObjectAdapterDB implements Program, ChangeM
 			throws CancelledException, IOException {
 
 		VersionException versionExc = null;
-		overlaySpaceAdapter = new OverlaySpaceAdapterDB(dbh);
+		try {
+			overlaySpaceAdapter =
+				OverlaySpaceDBAdapter.getOverlaySpaceAdapter(dbh, openMode, monitor);
+		}
+		catch (VersionException e) {
+			versionExc = e.combine(versionExc);
+			try {
+				overlaySpaceAdapter =
+					OverlaySpaceDBAdapter.getOverlaySpaceAdapter(dbh, READ_ONLY, monitor);
+			}
+			catch (VersionException e1) {
+				if (e1.isUpgradable()) {
+					throw new RuntimeException(
+						"OverlaySpaceDBAdapter is supported but failed to open as READ-ONLY!");
+				}
+				// Unable to proceed without overlay space adapter !
+				return versionExc;
+			}
+		}
 		overlaySpaceAdapter.initializeOverlaySpaces(addressFactory);
-		monitor.checkCanceled();
+		monitor.checkCancelled();
 
 		try {
 			checkOldProperties(openMode, monitor);
@@ -1560,7 +1674,7 @@ public class ProgramDB extends DomainObjectAdapterDB implements Program, ChangeM
 				return versionExc;
 			}
 		}
-		monitor.checkCanceled();
+		monitor.checkCancelled();
 
 		try {
 			memoryManager =
@@ -1570,7 +1684,7 @@ public class ProgramDB extends DomainObjectAdapterDB implements Program, ChangeM
 		catch (VersionException e) {
 			versionExc = e.combine(versionExc);
 		}
-		monitor.checkCanceled();
+		monitor.checkCancelled();
 
 		try {
 			managers[CODE_MGR] = new CodeManager(dbh, addrMap, openMode, lock, monitor);
@@ -1578,7 +1692,7 @@ public class ProgramDB extends DomainObjectAdapterDB implements Program, ChangeM
 		catch (VersionException e) {
 			versionExc = e.combine(versionExc);
 		}
-		monitor.checkCanceled();
+		monitor.checkCancelled();
 
 		try {
 			managers[FUNCTION_MGR] = new FunctionManagerDB(dbh, addrMap, openMode, lock, monitor);
@@ -1607,7 +1721,7 @@ public class ProgramDB extends DomainObjectAdapterDB implements Program, ChangeM
 				versionExc = e.combine(versionExc);
 			}
 		}
-		monitor.checkCanceled();
+		monitor.checkCancelled();
 
 		try {
 			managers[EXTERNAL_MGR] = new ExternalManagerDB(dbh, addrMap, openMode, lock, monitor);
@@ -1615,15 +1729,15 @@ public class ProgramDB extends DomainObjectAdapterDB implements Program, ChangeM
 		catch (VersionException e) {
 			versionExc = e.combine(versionExc);
 		}
-		monitor.checkCanceled();
+		monitor.checkCancelled();
 
 		try {
-			managers[SYMBOL_MGR] = new SymbolManager(dbh, addrMap, openMode, lock, monitor);
+			managers[SYMBOL_MGR] = new SymbolManager(dbh, addrMap, openMode, this, lock, monitor);
 		}
 		catch (VersionException e) {
 			versionExc = e.combine(versionExc);
 		}
-		monitor.checkCanceled();
+		monitor.checkCancelled();
 
 		try {
 			managers[NAMESPACE_MGR] =
@@ -1632,7 +1746,7 @@ public class ProgramDB extends DomainObjectAdapterDB implements Program, ChangeM
 		catch (VersionException e) {
 			versionExc = e.combine(versionExc);
 		}
-		monitor.checkCanceled();
+		monitor.checkCancelled();
 
 		try {
 			managers[REF_MGR] = new ReferenceDBManager(dbh, addrMap, openMode, lock, monitor);
@@ -1640,7 +1754,7 @@ public class ProgramDB extends DomainObjectAdapterDB implements Program, ChangeM
 		catch (VersionException e) {
 			versionExc = e.combine(versionExc);
 		}
-		monitor.checkCanceled();
+		monitor.checkCancelled();
 
 		try {
 			managers[EQUATE_MGR] = new EquateManager(dbh, addrMap, openMode, lock, monitor);
@@ -1648,7 +1762,7 @@ public class ProgramDB extends DomainObjectAdapterDB implements Program, ChangeM
 		catch (VersionException e) {
 			versionExc = e.combine(versionExc);
 		}
-		monitor.checkCanceled();
+		monitor.checkCancelled();
 
 		try {
 			managers[DATA_MGR] =
@@ -1657,7 +1771,7 @@ public class ProgramDB extends DomainObjectAdapterDB implements Program, ChangeM
 		catch (VersionException e) {
 			versionExc = e.combine(versionExc);
 		}
-		monitor.checkCanceled();
+		monitor.checkCancelled();
 
 		try {
 			managers[PROPERTY_MGR] =
@@ -1666,7 +1780,7 @@ public class ProgramDB extends DomainObjectAdapterDB implements Program, ChangeM
 		catch (VersionException e) {
 			versionExc = e.combine(versionExc);
 		}
-		monitor.checkCanceled();
+		monitor.checkCancelled();
 
 		try {
 			managers[BOOKMARK_MGR] = new BookmarkDBManager(dbh, addrMap, openMode, lock, monitor);
@@ -1674,7 +1788,7 @@ public class ProgramDB extends DomainObjectAdapterDB implements Program, ChangeM
 		catch (VersionException e) {
 			versionExc = e.combine(versionExc);
 		}
-		monitor.checkCanceled();
+		monitor.checkCancelled();
 
 		try {
 			managers[TREE_MGR] = new TreeManager(dbh, this, addrMap, openMode, lock, monitor);
@@ -1682,7 +1796,7 @@ public class ProgramDB extends DomainObjectAdapterDB implements Program, ChangeM
 		catch (VersionException e) {
 			versionExc = e.combine(versionExc);
 		}
-		monitor.checkCanceled();
+		monitor.checkCancelled();
 
 		try {
 			managers[RELOC_MGR] = new RelocationManager(dbh, addrMap, openMode, lock, monitor);
@@ -1690,7 +1804,7 @@ public class ProgramDB extends DomainObjectAdapterDB implements Program, ChangeM
 		catch (VersionException e) {
 			versionExc = e.combine(versionExc);
 		}
-		monitor.checkCanceled();
+		monitor.checkCancelled();
 
 		try {
 			managers[CONTEXT_MGR] = new ProgramRegisterContextDB(dbh, this, language, compilerSpec,
@@ -1700,7 +1814,7 @@ public class ProgramDB extends DomainObjectAdapterDB implements Program, ChangeM
 			versionExc = e.combine(versionExc);
 		}
 
-		monitor.checkCanceled();
+		monitor.checkCancelled();
 
 		return versionExc;
 	}
@@ -1709,20 +1823,26 @@ public class ProgramDB extends DomainObjectAdapterDB implements Program, ChangeM
 			throws CancelledException, IOException {
 		globalNamespace = new GlobalNamespace(getMemory());
 		for (int i = 0; i < NUM_MANAGERS; i++) {
-			monitor.checkCanceled();
+			monitor.checkCancelled();
 			managers[i].setProgram(this);
 		}
 		listing.setProgram(this);
 
-		monitor.checkCanceled();
+		if (openMode == DBConstants.CREATE) {
+			getDataTypeManager().saveDataOrganization();
+		}
 
-		// Upgrade Function Manager 
-		if (openMode == UPGRADE && oldFunctionMgr != null) {
-			oldFunctionMgr.upgrade(this, monitor);
+		monitor.checkCancelled();
+
+		if (openMode == UPGRADE) {
+			if (oldFunctionMgr != null) {
+				// Upgrade Function Manager 
+				oldFunctionMgr.upgrade(this, monitor);
+			}
 		}
 
 		for (int i = 0; i < NUM_MANAGERS; i++) {
-			monitor.checkCanceled();
+			monitor.checkCancelled();
 			managers[i].programReady(openMode, getStoredVersion(), monitor);
 		}
 
@@ -1736,12 +1856,11 @@ public class ProgramDB extends DomainObjectAdapterDB implements Program, ChangeM
 			refreshName();
 			overlaySpaceAdapter.updateOverlaySpaces(addressFactory);
 			addrMap.invalidateCache();
-			if (!imageBaseOverride) {
-				refreshImageBase();
-			}
+			refreshImageBase();
 			for (int i = 0; i < NUM_MANAGERS; i++) {
 				managers[i].invalidateCache(all);
 			}
+			restoreProgramInformationOptions();
 			installExtensions(); // Reload any extensions
 		}
 		catch (IOException e) {
@@ -1829,14 +1948,14 @@ public class ProgramDB extends DomainObjectAdapterDB implements Program, ChangeM
 			clearCache(false);
 			Iterator<String> iter = addrSetPropertyMap.keySet().iterator();
 			while (iter.hasNext()) {
-				monitor.checkCanceled();
+				monitor.checkCancelled();
 				AddressSetPropertyMapDB pm = addrSetPropertyMap.get(iter.next());
 				pm.remove(startAddr, endAddr);
 			}
 
 			iter = intRangePropertyMap.keySet().iterator();
 			while (iter.hasNext()) {
-				monitor.checkCanceled();
+				monitor.checkCancelled();
 				IntRangeMap map = intRangePropertyMap.get(iter.next());
 				map.clearValue(startAddr, endAddr);
 			}
@@ -1962,7 +2081,7 @@ public class ProgramDB extends DomainObjectAdapterDB implements Program, ChangeM
 					Msg.info(this,
 						"Updating language version for Program " + getName() + ": " +
 							language.getLanguageDescription() + " (Version " +
-							language.getVersion() + "." + language.getMinorVersion());
+							language.getVersion() + "." + language.getMinorVersion() + ")");
 				}
 
 				if (newCompilerSpecID != null) {
@@ -1980,7 +2099,8 @@ public class ProgramDB extends DomainObjectAdapterDB implements Program, ChangeM
 				languageMinorVersion = language.getMinorVersion();
 
 				if (translator != null) {
-					addressFactory = new ProgramAddressFactory(language, compilerSpec);
+					addressFactory = new ProgramAddressFactory(language, compilerSpec,
+						s -> getDefinedAddressSet(s));
 
 					addrMap.setLanguage(language, addressFactory, translator);
 					overlaySpaceAdapter.setLanguage(language, addressFactory, translator);
@@ -2009,6 +2129,9 @@ public class ProgramDB extends DomainObjectAdapterDB implements Program, ChangeM
 				else {
 					contextMgr.initializeDefaultValues(language, compilerSpec);
 				}
+
+				// Update datatype manager data organization
+				getDataTypeManager().languageChanged(monitor);
 
 				// Force function manager to reconcile calling conventions
 				managers[FUNCTION_MGR].setProgram(this);
@@ -2095,7 +2218,7 @@ public class ProgramDB extends DomainObjectAdapterDB implements Program, ChangeM
 		InstructionIterator instructions =
 			codeManager.getInstructions(memoryManager.getLoadedAndInitializedAddressSet(), true);
 		while (instructions.hasNext()) {
-			monitor.checkCanceled();
+			monitor.checkCancelled();
 			if (++cnt % 100 == 0) {
 				monitor.setProgress(cnt);
 			}
@@ -2384,6 +2507,8 @@ public class ProgramDB extends DomainObjectAdapterDB implements Program, ChangeM
 		lock.acquire();
 		try {
 			((ProgramCompilerSpec) compilerSpec).installExtensions();
+			getFunctionManager().invalidateCache(true);
+			getDataTypeManager().invalidateCache();
 		}
 		finally {
 			lock.release();

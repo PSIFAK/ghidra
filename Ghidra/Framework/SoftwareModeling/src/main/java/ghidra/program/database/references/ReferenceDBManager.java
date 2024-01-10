@@ -26,7 +26,8 @@ import db.util.ErrorHandler;
 import ghidra.program.database.*;
 import ghidra.program.database.external.ExternalManagerDB;
 import ghidra.program.database.map.AddressMap;
-import ghidra.program.database.symbol.*;
+import ghidra.program.database.symbol.SymbolDB;
+import ghidra.program.database.symbol.SymbolManager;
 import ghidra.program.model.address.*;
 import ghidra.program.model.lang.Register;
 import ghidra.program.model.listing.*;
@@ -166,7 +167,7 @@ public class ReferenceDBManager implements ReferenceManager, ManagerDB, ErrorHan
 
 		int cnt = 0;
 		while (toIterator.hasNext()) {
-			monitor.checkCanceled();
+			monitor.checkCancelled();
 			Address oldAddr = toIterator.next();
 			if (!oldAddr.isVariableAddress() && !(oldAddr instanceof OldGenericNamespaceAddress)) {
 				break;
@@ -252,7 +253,7 @@ public class ReferenceDBManager implements ReferenceManager, ManagerDB, ErrorHan
 
 		RecordIterator iter = oldStackRefAdapter.getRecords();
 		while (iter.hasNext()) {
-			monitor.checkCanceled();
+			monitor.checkCancelled();
 			DBRecord rec = iter.next();
 
 			Address fromAddr =
@@ -302,6 +303,17 @@ public class ReferenceDBManager implements ReferenceManager, ManagerDB, ErrorHan
 	 * @return combined reference type, or the newType if unable to combine
 	 */
 	private RefType combineReferenceType(RefType newType, RefType oldType) {
+		// check if types are the same, if same no use doing work replacing reference
+		if (newType == oldType) {
+			return oldType;
+		}
+		// any flow reference should be used over the existing ref to the same location
+		if (newType.isFlow()) {
+			return newType;  // allow any new flow ref to replace old type
+		}
+		if (oldType.isFlow()) {
+			return oldType; // always keep flow over new data ref
+		}
 		if (newType == RefType.DATA) {
 			if (oldType.isData()) {
 				return oldType;
@@ -437,6 +449,9 @@ public class ReferenceDBManager implements ReferenceManager, ManagerDB, ErrorHan
 		if (!fromAddr.isMemoryAddress()) {
 			throw new IllegalArgumentException("From address must be memory address");
 		}
+		if (!type.isData()) {
+			throw new IllegalArgumentException("Invalid stack reference type: " + type);
+		}
 		Function function = program.getFunctionManager().getFunctionContaining(fromAddr);
 		if (function == null) {
 			throw new IllegalArgumentException(
@@ -475,6 +490,9 @@ public class ReferenceDBManager implements ReferenceManager, ManagerDB, ErrorHan
 			RefType type, SourceType sourceType) {
 		if (!fromAddr.isMemoryAddress()) {
 			throw new IllegalArgumentException("From address must be memory address");
+		}
+		if (!type.isData()) {
+			throw new IllegalArgumentException("Invalid register reference type: " + type);
 		}
 		removeAllFrom(fromAddr, opIndex);
 		try {
@@ -561,9 +579,9 @@ public class ReferenceDBManager implements ReferenceManager, ManagerDB, ErrorHan
 		if (!fromAddr.isMemoryAddress()) {
 			throw new IllegalArgumentException("From address must be memory addresses");
 		}
-		removeAllFrom(fromAddr, opIndex);
 		try {
 			if (symbolMgr.getPrimarySymbol(location.getExternalSpaceAddress()) != null) {
+				removeAllFrom(fromAddr, opIndex);
 				return addRef(fromAddr, location.getExternalSpaceAddress(), type, sourceType,
 					opIndex, false, false, 0);
 			}
@@ -586,24 +604,17 @@ public class ReferenceDBManager implements ReferenceManager, ManagerDB, ErrorHan
 	public Reference addExternalReference(Address fromAddr, String libraryName, String extLabel,
 			Address extAddr, SourceType sourceType, int opIndex, RefType type)
 			throws InvalidInputException, DuplicateNameException {
-		if (libraryName == null || libraryName.length() == 0) {
-			throw new InvalidInputException("A valid library name must be specified.");
+
+		if (!fromAddr.isMemoryAddress()) {
+			throw new IllegalArgumentException("From addresses must be memory addresses");
 		}
-		if (extLabel != null && extLabel.length() == 0) {
-			extLabel = null;
-		}
-		if (extLabel == null && extAddr == null) {
-			throw new InvalidInputException("Either an external label or address is required");
-		}
-		if (!fromAddr.isMemoryAddress() || (extAddr != null && !extAddr.isMemoryAddress())) {
-			throw new IllegalArgumentException(
-				"From and extAddr addresses must be memory addresses");
-		}
-		removeAllFrom(fromAddr, opIndex);
 		try {
-			ExternalManagerDB extMgr = (ExternalManagerDB) program.getExternalManager();
+			ExternalManagerDB extMgr = program.getExternalManager();
 			ExternalLocation extLoc =
 				extMgr.addExtLocation(libraryName, extLabel, extAddr, sourceType);
+
+			removeAllFrom(fromAddr, opIndex);
+
 			Address toAddr = extLoc.getExternalSpaceAddress();
 
 			return addRef(fromAddr, toAddr, type, sourceType, opIndex, false, false, 0);
@@ -618,24 +629,16 @@ public class ReferenceDBManager implements ReferenceManager, ManagerDB, ErrorHan
 	public Reference addExternalReference(Address fromAddr, Namespace extNamespace, String extLabel,
 			Address extAddr, SourceType sourceType, int opIndex, RefType type)
 			throws InvalidInputException, DuplicateNameException {
-		if (extNamespace == null || !extNamespace.isExternal()) {
-			throw new InvalidInputException("The namespace must be an external namespace.");
+		if (!fromAddr.isMemoryAddress()) {
+			throw new IllegalArgumentException("From addresses must be memory addresses");
 		}
-		if (extLabel != null && extLabel.length() == 0) {
-			extLabel = null;
-		}
-		if (extLabel == null && extAddr == null) {
-			throw new InvalidInputException("Either an external label or address is required");
-		}
-		if (!fromAddr.isMemoryAddress() || (extAddr != null && !extAddr.isMemoryAddress())) {
-			throw new IllegalArgumentException(
-				"From and extAddr addresses must be memory addresses");
-		}
-		removeAllFrom(fromAddr, opIndex);
 		try {
-			ExternalManagerDB extMgr = (ExternalManagerDB) program.getExternalManager();
+			ExternalManagerDB extMgr = program.getExternalManager();
 			ExternalLocation extLoc =
 				extMgr.addExtLocation(extNamespace, extLabel, extAddr, sourceType);
+
+			removeAllFrom(fromAddr, opIndex);
+
 			Address toAddr = extLoc.getExternalSpaceAddress();
 			return addRef(fromAddr, toAddr, type, sourceType, opIndex, false, false, 0);
 		}
@@ -1245,24 +1248,16 @@ public class ReferenceDBManager implements ReferenceManager, ManagerDB, ErrorHan
 
 	@Override
 	public void setAssociation(Symbol s, Reference ref) {
-		if (s.getSymbolType() != SymbolType.LABEL || s.isDynamic()) {
+		// Only valid for non-dynamic memory label symbols
+		if (s.getSymbolType() != SymbolType.LABEL || s.isDynamic() || s.isExternal()) {
 			return;
 		}
 		lock.acquire();
 		try {
-			if (s instanceof VariableSymbolDB) {
-				VariableStorage storage = ((VariableSymbolDB) s).getVariableStorage();
-				if (!storage.contains(ref.getToAddress())) {
-					throw new IllegalArgumentException("Variable symbol " + s.getName() +
-						" does not contain referenced address: " + ref.getToAddress() + ")");
-				}
-			}
-			else {
-				Address symAddr = s.getAddress();
-				if (!symAddr.equals(ref.getToAddress())) {
-					throw new IllegalArgumentException("Symbol address(" + symAddr +
-						") not equal to reference's To address(" + ref.getToAddress() + ")");
-				}
+			Address symAddr = s.getAddress();
+			if (!symAddr.equals(ref.getToAddress())) {
+				throw new IllegalArgumentException("Symbol address(" + symAddr +
+					") not equal to reference's To address(" + ref.getToAddress() + ")");
 			}
 			try {
 				setSymbolID(ref, s.getID());
@@ -1397,7 +1392,7 @@ public class ReferenceDBManager implements ReferenceManager, ManagerDB, ErrorHan
 		}
 
 		for (Reference ref : refs) {
-			monitor.checkCanceled();
+			monitor.checkCancelled();
 
 			Address fromAddr = ref.getFromAddress();
 			int opIndex = ref.getOperandIndex();
@@ -1444,7 +1439,7 @@ public class ReferenceDBManager implements ReferenceManager, ManagerDB, ErrorHan
 
 			AddressIterator refSourceIter = getReferenceSourceIterator(firstAddr, forward);
 			while (refSourceIter.hasNext()) {
-				monitor.checkCanceled();
+				monitor.checkCancelled();
 
 				Address oldFromAddr = refSourceIter.next();
 				if ((forward && oldFromAddr.compareTo(fromEndAddr) > 0) ||
@@ -1467,7 +1462,7 @@ public class ReferenceDBManager implements ReferenceManager, ManagerDB, ErrorHan
 				Address newRefFromAddr = toAddr.add(offset);
 
 				for (Reference ref : refs) {
-					monitor.checkCanceled();
+					monitor.checkCancelled();
 
 					Address newRefToAddr = ref.getToAddress();
 					int opIndex = ref.getOperandIndex();
@@ -1579,8 +1574,9 @@ public class ReferenceDBManager implements ReferenceManager, ManagerDB, ErrorHan
 	 * Create a memory reference to the given address to mark it as
 	 * an external entry point.
 	 * @param toAddr the address at which to make an external entry point
+	 * @throws IllegalArgumentException if a non-memory address is specified
 	 */
-	public void addExternalEntryPointRef(Address toAddr) {
+	public void addExternalEntryPointRef(Address toAddr) throws IllegalArgumentException {
 		if (!toAddr.isMemoryAddress()) {
 			throw new IllegalArgumentException("Entry point address must be memory address");
 		}

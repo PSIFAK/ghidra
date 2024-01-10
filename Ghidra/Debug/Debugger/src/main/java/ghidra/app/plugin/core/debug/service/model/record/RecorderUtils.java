@@ -15,13 +15,11 @@
  */
 package ghidra.app.plugin.core.debug.service.model.record;
 
-import java.util.NavigableMap;
-import java.util.TreeMap;
 import java.util.concurrent.CompletableFuture;
 
-import ghidra.app.services.TraceRecorder;
 import ghidra.async.AsyncUtils;
 import ghidra.async.TypeSpec;
+import ghidra.debug.api.model.TraceRecorder;
 import ghidra.program.model.address.*;
 import ghidra.util.Msg;
 import ghidra.util.task.TaskMonitor;
@@ -45,26 +43,21 @@ public enum RecorderUtils {
 		return result;
 	}
 
-	public CompletableFuture<NavigableMap<Address, byte[]>> readMemoryBlocks(
-			TraceRecorder recorder, int blockBits, AddressSetView set, TaskMonitor monitor,
-			boolean returnResult) {
+	public CompletableFuture<Void> readMemoryBlocks(
+			TraceRecorder recorder, int blockBits, AddressSetView set, TaskMonitor monitor) {
 
 		// NOTE: I don't intend to warn about the number of requests.
 		//   They're delivered in serial, and there's a cancel button that works
 
 		int blockSize = 1 << blockBits;
 		int total = 0;
-		AddressSetView expSet = quantize(blockBits, set)
-				.intersect(recorder.getTrace()
-						.getMemoryManager()
-						.getRegionsAddressSet(recorder.getSnap()));
+		AddressSetView expSet = quantize(blockBits, set);
 		for (AddressRange r : expSet) {
 			total += Long.divideUnsigned(r.getLength() + blockSize - 1, blockSize);
 		}
 		monitor.initialize(total);
 		monitor.setMessage("Reading memory");
 		// TODO: Read blocks in parallel? Probably NO. Tends to overload the connector.
-		NavigableMap<Address, byte[]> result = returnResult ? new TreeMap<>() : null;
 		return AsyncUtils.each(TypeSpec.VOID, expSet.iterator(), (r, loop) -> {
 			AddressRangeChunker blocks = new AddressRangeChunker(r, blockSize);
 			AsyncUtils.each(TypeSpec.VOID, blocks.iterator(), (blk, inner) -> {
@@ -72,15 +65,11 @@ public enum RecorderUtils {
 				monitor.incrementProgress(1);
 				CompletableFuture<byte[]> future =
 					recorder.readMemory(blk.getMinAddress(), (int) blk.getLength());
-				future.thenAccept(data -> {
-					if (returnResult) {
-						result.put(blk.getMinAddress(), data);
-					}
-				}).exceptionally(e -> {
+				future.exceptionally(e -> {
 					Msg.error(this, "Could not read " + blk + ": " + e);
 					return null; // Continue looping on errors
 				}).thenApply(__ -> !monitor.isCancelled()).handle(inner::repeatWhile);
 			}).thenApply(v -> !monitor.isCancelled()).handle(loop::repeatWhile);
-		}).thenApply(__ -> result);
+		});
 	}
 }

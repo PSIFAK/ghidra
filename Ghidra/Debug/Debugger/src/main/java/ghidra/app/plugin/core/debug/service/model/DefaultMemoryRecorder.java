@@ -15,17 +15,17 @@
  */
 package ghidra.app.plugin.core.debug.service.model;
 
-import java.util.*;
+import java.util.Collection;
+import java.util.HashSet;
 import java.util.concurrent.CompletableFuture;
-
-import com.google.common.collect.Range;
 
 import ghidra.app.plugin.core.debug.service.model.interfaces.ManagedMemoryRecorder;
 import ghidra.app.plugin.core.debug.service.model.record.RecorderUtils;
 import ghidra.dbg.target.TargetMemory;
 import ghidra.dbg.target.TargetMemoryRegion;
-import ghidra.program.model.address.Address;
+import ghidra.program.model.address.AddressRange;
 import ghidra.program.model.address.AddressSetView;
+import ghidra.trace.model.Lifespan;
 import ghidra.trace.model.Trace;
 import ghidra.trace.model.memory.*;
 import ghidra.util.Msg;
@@ -47,9 +47,14 @@ public class DefaultMemoryRecorder implements ManagedMemoryRecorder {
 		this.memoryManager = trace.getMemoryManager();
 	}
 
-	public CompletableFuture<NavigableMap<Address, byte[]>> captureProcessMemory(AddressSetView set,
-			TaskMonitor monitor, boolean toMap) {
-		return RecorderUtils.INSTANCE.readMemoryBlocks(recorder, BLOCK_BITS, set, monitor, toMap);
+	public CompletableFuture<Void> captureProcessMemory(AddressSetView set,
+			TaskMonitor monitor) {
+		return RecorderUtils.INSTANCE.readMemoryBlocks(recorder, BLOCK_BITS, set, monitor);
+	}
+
+	@Override
+	public void offerProcessMemory(TargetMemory memory) {
+		recorder.getProcessMemory().addMemory(memory);
 	}
 
 	@Override
@@ -67,8 +72,16 @@ public class DefaultMemoryRecorder implements ManagedMemoryRecorder {
 					Msg.warn(this, "Region " + path + " already recorded");
 					return;
 				}
-				traceRegion = memoryManager.addRegion(path, Range.atLeast(snap),
-					recorder.getMemoryMapper().targetToTrace(region.getRange()),
+				AddressRange traceRange =
+					recorder.getMemoryMapper().targetToTraceTruncated(region.getRange());
+				if (traceRange == null) {
+					Msg.warn(this, "Dropped unmappable region: " + region);
+					return;
+				}
+				if (region.getRange().getLength() != traceRange.getLength()) {
+					Msg.warn(this, "Truncated region: " + region);
+				}
+				traceRegion = memoryManager.addRegion(path, Lifespan.nowOn(snap), traceRange,
 					getTraceFlags(region));
 				traceRegion.setName(region.getDisplay());
 			}
@@ -79,6 +92,11 @@ public class DefaultMemoryRecorder implements ManagedMemoryRecorder {
 				Msg.error(this, "Failed to create region due to duplicate: " + e);
 			}
 		}, path);
+	}
+
+	@Override
+	public void removeProcessMemory(TargetMemory memory) {
+		recorder.getProcessMemory().removeMemory(memory);
 	}
 
 	@Override
@@ -93,7 +111,12 @@ public class DefaultMemoryRecorder implements ManagedMemoryRecorder {
 					Msg.warn(this, "Could not find region " + path + " in trace to remove");
 					return;
 				}
-				traceRegion.setDestructionSnap(snap - 1);
+				if (traceRegion.getCreationSnap() >= snap) {
+					traceRegion.delete();
+				}
+				else {
+					traceRegion.setDestructionSnap(snap - 1);
+				}
 			}
 			catch (DuplicateNameException | TraceOverlappedRegionException e) {
 				// Region is shrinking in time

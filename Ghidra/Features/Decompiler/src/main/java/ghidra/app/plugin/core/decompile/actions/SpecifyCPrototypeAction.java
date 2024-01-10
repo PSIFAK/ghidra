@@ -18,9 +18,6 @@ package ghidra.app.plugin.core.decompile.actions;
 import java.util.List;
 
 import docking.action.MenuData;
-import ghidra.app.decompiler.ClangFuncNameToken;
-import ghidra.app.decompiler.ClangToken;
-import ghidra.app.decompiler.component.DecompilerUtils;
 import ghidra.app.plugin.core.decompile.DecompilerActionContext;
 import ghidra.app.plugin.core.function.editor.*;
 import ghidra.app.services.DataTypeManagerService;
@@ -33,6 +30,7 @@ import ghidra.program.model.pcode.*;
 import ghidra.program.model.symbol.SourceType;
 import ghidra.util.HelpLocation;
 import ghidra.util.UndefinedFunction;
+import ghidra.util.exception.InvalidInputException;
 
 public class SpecifyCPrototypeAction extends AbstractDecompilerAction {
 
@@ -49,6 +47,8 @@ public class SpecifyCPrototypeAction extends AbstractDecompilerAction {
 	 * @param model function editor model
 	 */
 	private void verifyDynamicEditorModel(HighFunction hf, FunctionEditorModel model) {
+
+		// TODO: devise alternative approach - bad practice to manipulate model in this fashion
 
 		FunctionPrototype functionPrototype = hf.getFunctionPrototype();
 		int decompParamCnt = functionPrototype.getNumParams();
@@ -118,6 +118,13 @@ public class SpecifyCPrototypeAction extends AbstractDecompilerAction {
 			func.getName(), func.getProgram().getDataTypeManager());
 		FunctionPrototype functionPrototype = hf.getFunctionPrototype();
 
+		try {
+			fsig.setCallingConvention(functionPrototype.getModelName());
+		}
+		catch (InvalidInputException e) {
+			// ignore
+		}
+
 		int np = hf.getLocalSymbolMap().getNumParams();
 		fsig.setReturnType(functionPrototype.getReturnType());
 
@@ -128,26 +135,24 @@ public class SpecifyCPrototypeAction extends AbstractDecompilerAction {
 		}
 		fsig.setArguments(args);
 		fsig.setVarArgs(functionPrototype.isVarArg());
+		fsig.setNoReturn(functionPrototype.hasNoReturn());
 		return fsig;
 	}
 
 	/**
-	 * @param function is the current function
-	 * @param tokenAtCursor is the user selected token
-	 * @return the currently highlighted function or the currently decompiled
-	 *         function if there isn't one.
+	 * Get function affected by specified action context
+	 * 
+	 * @param function is the current decompiled function which will be the default if no other 
+	 * function identified by context token.
+	 * @param context decompiler action context
+	 * @return the function associated with the current context token.  If no function corresponds
+	 * to context token the decompiled function will be returned.
 	 */
-	synchronized Function getFunction(Function function, ClangToken tokenAtCursor) {
+	private Function getFunction(Function function, DecompilerActionContext context) {
 		// try to look up the function that is at the current cursor location
 		//   If there isn't one, just use the function we are in.
-		if (tokenAtCursor instanceof ClangFuncNameToken) {
-			Function tokenFunction = DecompilerUtils.getFunction(function.getProgram(),
-				(ClangFuncNameToken) tokenAtCursor);
-			if (tokenFunction != null) {
-				function = tokenFunction;
-			}
-		}
-		return function;
+		Function tokenFunction = getFunction(context);
+		return tokenFunction != null ? tokenFunction : function;
 	}
 
 	@Override
@@ -156,14 +161,12 @@ public class SpecifyCPrototypeAction extends AbstractDecompilerAction {
 		if (function instanceof UndefinedFunction) {
 			return false;
 		}
-
-		return getFunction(function, context.getTokenAtCursor()) != null;
+		return getFunction(function, context) != null;
 	}
 
 	@Override
 	protected void decompilerActionPerformed(DecompilerActionContext context) {
-		Function function =
-			getFunction(context.getFunction(), context.getTokenAtCursor());
+		Function function = getFunction(context.getFunction(), context);
 		PluginTool tool = context.getTool();
 		DataTypeManagerService service = tool.getService(DataTypeManagerService.class);
 
@@ -177,7 +180,6 @@ public class SpecifyCPrototypeAction extends AbstractDecompilerAction {
 		if (function.getEntryPoint().equals(hf.getFunction().getEntryPoint())) {
 			if (function.getSignatureSource() == SourceType.DEFAULT) {
 				model.setUseCustomizeStorage(false);
-				model.setCallingConventionName(functionPrototype.getModelName());
 				model.setFunctionData(buildSignature(hf));
 				verifyDynamicEditorModel(hf, model);
 			}

@@ -18,13 +18,12 @@ package ghidra.app.util.bin.format.elf;
 import java.io.IOException;
 import java.lang.reflect.Constructor;
 
-import ghidra.app.util.bin.*;
+import ghidra.app.util.bin.BinaryReader;
+import ghidra.app.util.bin.StructConverter;
 import ghidra.app.util.bin.format.elf.extend.ElfLoadAdapter;
 import ghidra.app.util.bin.format.elf.relocation.ElfRelocationContext;
 import ghidra.app.util.bin.format.elf.relocation.ElfRelocationHandler;
 import ghidra.program.model.data.*;
-import ghidra.util.Conv;
-import ghidra.util.DataConverter;
 
 /**
  * A class to represent the Elf32_Rel and Elf64_Rel data structure.
@@ -73,7 +72,7 @@ import ghidra.util.DataConverter;
  * {@link #initElfRelocation(BinaryReader, ElfHeader, int, boolean)} and/or
  * {@link #initElfRelocation(ElfHeader, int, boolean, long, long, long)}.  
  */
-public class ElfRelocation implements ByteArrayConverter, StructConverter {
+public class ElfRelocation implements StructConverter {
 
 	protected static final String R_OFFSET_COMMENT = "location to apply the relocation action";
 	protected static final String R_INFO_COMMENT =
@@ -81,9 +80,12 @@ public class ElfRelocation implements ByteArrayConverter, StructConverter {
 	protected static final String R_ADDEND_COMMENT =
 		"a constant addend used to compute the relocatable field value";
 
+	private static final long BYTE_MASK = 0xFF;
+	private static final long INT_MASK = 0xFFFFFFFFL;
+
 	private long r_offset;
 	private long r_info;
-	private long r_addend;
+	private long r_addend; // signed-value
 
 	private boolean hasAddend;
 	private boolean is32bit;
@@ -98,8 +100,8 @@ public class ElfRelocation implements ByteArrayConverter, StructConverter {
 	 * @return ELF relocation object
 	 * @throws IOException if an IO or parse error occurs
 	 */
-	static ElfRelocation createElfRelocation(BinaryReader reader,
-			ElfHeader elfHeader, int relocationIndex, boolean withAddend) throws IOException {
+	static ElfRelocation createElfRelocation(BinaryReader reader, ElfHeader elfHeader,
+			int relocationIndex, boolean withAddend) throws IOException {
 		Class<? extends ElfRelocation> elfRelocationClazz = getElfRelocationClass(elfHeader);
 		ElfRelocation elfRelocation = getInstance(elfRelocationClazz);
 		elfRelocation.initElfRelocation(reader, elfHeader, relocationIndex, withAddend);
@@ -114,13 +116,12 @@ public class ElfRelocation implements ByteArrayConverter, StructConverter {
 	 * @param withAddend true if if RELA entry with addend, else false
 	 * @param r_offset The offset for the entry
 	 * @param r_info The info value for the entry
-	 * @param r_addend The addend for the entry
+	 * @param r_addend The signed-addend for the entry (32-bit addends should be signed-extended to 64-bits)
 	 * @return ELF relocation object
 	 * @throws IOException if an IO or parse error occurs
 	 */
-	static ElfRelocation createElfRelocation(ElfHeader elfHeader,
-			int relocationIndex, boolean withAddend, long r_offset, long r_info, long r_addend)
-			throws IOException {
+	static ElfRelocation createElfRelocation(ElfHeader elfHeader, int relocationIndex,
+			boolean withAddend, long r_offset, long r_info, long r_addend) throws IOException {
 		Class<? extends ElfRelocation> elfRelocationClazz = getElfRelocationClass(elfHeader);
 		ElfRelocation elfRelocation = getInstance(elfRelocationClazz);
 		elfRelocation.initElfRelocation(elfHeader, relocationIndex, withAddend, r_offset, r_info,
@@ -189,39 +190,37 @@ public class ElfRelocation implements ByteArrayConverter, StructConverter {
 	 * @param elfHeader ELF header
 	 * @param relocationTableIndex index of relocation within relocation table
 	 * @param withAddend true if if RELA entry with addend, else false
-	 * @param r_offset The offset for the entry
-	 * @param r_info The info value for the entry
-	 * @param r_addend The addend for the entry
+	 * @param offset The offset for the entry (r_offset)
+	 * @param info The info value for the entry (r_info)
+	 * @param addend The signed-addend (r_addend) for the entry (32-bit addends should 
+	 * be signed-extended to 64-bits)
 	 * @throws IOException if an IO or parse error occurs
 	 */
 	protected void initElfRelocation(ElfHeader elfHeader, int relocationTableIndex,
-			boolean withAddend, long r_offset, long r_info, long r_addend) throws IOException {
+			boolean withAddend, long offset, long info, long addend) throws IOException {
 		this.is32bit = elfHeader.is32Bit();
 		this.relocationIndex = relocationTableIndex;
 		this.hasAddend = withAddend;
 
 		if (is32bit) {
-			this.r_offset = Integer.toUnsignedLong((int) r_offset);
-			this.r_info = Integer.toUnsignedLong((int) r_info);
-			if (hasAddend) {
-				this.r_addend = Integer.toUnsignedLong((int) r_addend);
-			}
+			this.r_offset = Integer.toUnsignedLong((int) offset);
+			this.r_info = Integer.toUnsignedLong((int) info);
 		}
 		else {
-			this.r_offset = r_offset;
-			this.r_info = r_info;
-			if (hasAddend) {
-				this.r_addend = r_addend;
-			}
+			this.r_offset = offset;
+			this.r_info = info;
+		}
+		if (hasAddend) {
+			this.r_addend = addend;
 		}
 	}
 
 	private void readEntryData(BinaryReader reader) throws IOException {
 		if (is32bit) {
-			this.r_offset = Integer.toUnsignedLong(reader.readNextInt());
-			this.r_info = Integer.toUnsignedLong(reader.readNextInt());
+			this.r_offset = reader.readNextUnsignedInt();
+			this.r_info = reader.readNextUnsignedInt();
 			if (hasAddend) {
-				r_addend = Integer.toUnsignedLong(reader.readNextInt());
+				r_addend = reader.readNextInt();
 			}
 		}
 		else {
@@ -263,22 +262,6 @@ public class ElfRelocation implements ByteArrayConverter, StructConverter {
 	}
 
 	/**
-	 * Sets the relocation offset to the new specified value.
-	 * @param offset the new offset value
-	 */
-	public void setOffset(int offset) {
-		this.r_offset = offset & Conv.INT_MASK;
-	}
-
-	/**
-	 * Sets the relocation offset to the new specified value.
-	 * @param offset the new offset value
-	 */
-	public void setOffset(long offset) {
-		this.r_offset = offset;
-	}
-
-	/**
 	 * Returns the symbol index where the relocation must be made.
 	 * A value of 0 is generally returned when no symbol is relavent
 	 * to the relocation.
@@ -299,7 +282,7 @@ public class ElfRelocation implements ByteArrayConverter, StructConverter {
 	 * @return type of relocation to apply
 	 */
 	public int getType() {
-		return (int) (is32bit ? (r_info & Conv.BYTE_MASK) : (r_info & Conv.INT_MASK));
+		return (int) (is32bit ? (r_info & BYTE_MASK) : (r_info & INT_MASK));
 	}
 
 	/**
@@ -308,7 +291,7 @@ public class ElfRelocation implements ByteArrayConverter, StructConverter {
 	 * @param type relocation type to be applied
 	 */
 	public void setType(long type) {
-		long mask = is32bit ? Conv.BYTE_MASK : Conv.INT_MASK;
+		long mask = is32bit ? BYTE_MASK : INT_MASK;
 		r_info = (r_info & ~mask) + (type & mask);
 	}
 
@@ -321,10 +304,13 @@ public class ElfRelocation implements ByteArrayConverter, StructConverter {
 	}
 
 	/**
-	 * This member specifies a constant addend used to compute 
+	 * This member specifies the RELA signed-constant addend used to compute 
 	 * the value to be stored into the relocatable field.  This
-	 * value will be 0 for REL entries which do not supply an addend.
-	 * @return a constant addend
+	 * value will be 0 for REL entries which do not supply an addend and may
+	 * rely on an implicit addend stored at the relocation offset.
+	 * See {@link #hasAddend()} which is true for RELA / Elf_Rela and false
+	 * for REL / Elf_Rel relocations.
+	 * @return addend as 64-bit signed constant
 	 */
 	public long getAddend() {
 		return r_addend;
@@ -365,23 +351,6 @@ public class ElfRelocation implements ByteArrayConverter, StructConverter {
 			return hasAddend ? 24 : 16;
 		}
 		return hasAddend ? 12 : 8;
-	}
-
-	/**
-	 * @see ghidra.app.util.bin.ByteArrayConverter#toBytes(ghidra.util.DataConverter)
-	 */
-	@Override
-	public byte[] toBytes(DataConverter dc) {
-		byte[] bytes = new byte[sizeof()];
-		if (is32bit) {
-			dc.putInt(bytes, 0, (int) r_offset);
-			dc.putInt(bytes, 4, (int) r_info);
-		}
-		else {
-			dc.putLong(bytes, 0, r_offset);
-			dc.putLong(bytes, 8, r_info);
-		}
-		return bytes;
 	}
 
 	@Override

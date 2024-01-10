@@ -141,10 +141,8 @@ public class DWARFCompilationUnit {
 				debugInfoBR.setPointerIndex(debugInfoBR.length());
 				return null;
 			}
-			else {
-				throw new DWARFException(
-					"Invalid DWARF length 0 at 0x" + Long.toHexString(startOffset));
-			}
+			throw new DWARFException(
+				"Invalid DWARF length 0 at 0x" + Long.toHexString(startOffset));
 		}
 
 		long endOffset = debugInfoBR.getPointerIndex() + lengthInfo.length;
@@ -155,7 +153,8 @@ public class DWARFCompilationUnit {
 
 		if (version < 2 || version > 4) {
 			throw new DWARFException(
-				"Only DWARF version 2, 3, or 4 information is currently supported.");
+				"Only DWARF version 2, 3, or 4 information is currently supported (detected " +
+					version + ").");
 		}
 		if (firstDIEOffset > endOffset) {
 			throw new IOException("Invalid length " + (endOffset - startOffset) +
@@ -196,7 +195,7 @@ public class DWARFCompilationUnit {
 
 	private static boolean isAllZerosUntilEOF(BinaryReader reader) throws IOException {
 		reader = reader.clone();
-		while (reader.getPointerIndex() < reader.length()) {
+		while (reader.hasNext()) {
 			if (reader.readNextByte() != 0) {
 				return false;
 			}
@@ -344,17 +343,28 @@ public class DWARFCompilationUnit {
 			throws IOException, DWARFException, CancelledException {
 
 		BinaryReader br = dwarfProgram.getDebugInfo();
-		br.setPointerIndex(getFirstDIEOffset());
+		br.setPointerIndex(firstDIEOffset);
 
 		Deque<DebugInfoEntry> parentStack = new ArrayDeque<>();
 
 		DebugInfoEntry parent = null;
 		DebugInfoEntry die;
 		DebugInfoEntry unexpectedTerminator = null;
-		while ((br.getPointerIndex() < getEndOffset()) &&
-			(die = DebugInfoEntry.read(br, this, dwarfProgram.getAttributeFactory())) != null) {
+		while (br.getPointerIndex() < endOffset) {
+			long startOfDIE = br.getPointerIndex();
+			try {
+				die = DebugInfoEntry.read(br, this, dwarfProgram.getAttributeFactory());
+			}
+			catch (IOException e) {
+				Msg.error(this,
+					"Failed to read DIE at offset 0x%x in compunit %d (at 0x%x), skipping remainder of compilation unit."
+							.formatted(startOfDIE, compUnitNumber, startOffset),
+					e);
+				br.setPointerIndex(endOffset);
+				continue;
+			}
 
-			monitor.checkCanceled();
+			monitor.checkCancelled();
 
 			if (die.isTerminator()) {
 				if (parent == null && parentStack.isEmpty()) {
@@ -366,8 +376,8 @@ public class DWARFCompilationUnit {
 			}
 
 			if (unexpectedTerminator != null) {
-				throw new DWARFException("Unexpected terminator entry at " +
-					Long.toHexString(unexpectedTerminator.getOffset()));
+				throw new DWARFException("Unexpected terminator entry at 0x%x"
+						.formatted(unexpectedTerminator.getOffset()));
 			}
 			entries.add(die);
 
@@ -376,9 +386,9 @@ public class DWARFCompilationUnit {
 				die.setParent(parent);
 			}
 			else {
-				if (die.getOffset() != getFirstDIEOffset()) {
+				if (die.getOffset() != firstDIEOffset) {
 					throw new DWARFException(
-						"Unexpected root level DIE at " + Long.toHexString(die.getOffset()));
+						"Unexpected root level DIE at 0x%x".formatted(die.getOffset()));
 				}
 			}
 

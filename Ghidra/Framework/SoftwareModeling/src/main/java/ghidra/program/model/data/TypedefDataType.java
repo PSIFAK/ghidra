@@ -40,7 +40,7 @@ public class TypedefDataType extends GenericDataType implements TypeDef {
 	 * @param dt data type that is being typedef'ed (may not be null)
 	 */
 	public TypedefDataType(String name, DataType dt) {
-		this(CategoryPath.ROOT, name, dt, null);
+		this(CategoryPath.ROOT, name, dt, dt.getDataTypeManager());
 	}
 
 	/**
@@ -50,7 +50,7 @@ public class TypedefDataType extends GenericDataType implements TypeDef {
 	 * @param dt data type that is being typedef'ed (may not be null)
 	 */
 	public TypedefDataType(CategoryPath path, String name, DataType dt) {
-		this(path, name, dt, null);
+		this(path, name, dt, dt.getDataTypeManager());
 	}
 
 	/**
@@ -129,6 +129,33 @@ public class TypedefDataType extends GenericDataType implements TypeDef {
 	}
 
 	@Override
+	public String getDefaultLabelPrefix(MemBuffer buf, Settings settings, int len,
+			DataTypeDisplayOptions options) {
+		if (isAutoNamed()) {
+			return getDataType().getDefaultLabelPrefix(buf, settings, len, options);
+		}
+		return super.getDefaultLabelPrefix(buf, settings, len, options);
+	}
+
+	@Override
+	public String getDefaultAbbreviatedLabelPrefix() {
+		if (isAutoNamed()) {
+			return getDataType().getDefaultAbbreviatedLabelPrefix();
+		}
+		return super.getDefaultAbbreviatedLabelPrefix();
+	}
+
+	@Override
+	public String getDefaultOffcutLabelPrefix(MemBuffer buf, Settings settings, int len,
+			DataTypeDisplayOptions options, int offcutLength) {
+		if (isAutoNamed()) {
+			return getDataType().getDefaultOffcutLabelPrefix(buf, settings, len, options,
+				offcutLength);
+		}
+		return super.getDefaultOffcutLabelPrefix(buf, settings, len, options, offcutLength);
+	}
+
+	@Override
 	public boolean hasLanguageDependantLength() {
 		return dataType.hasLanguageDependantLength();
 	}
@@ -180,6 +207,11 @@ public class TypedefDataType extends GenericDataType implements TypeDef {
 	@Override
 	public int getLength() {
 		return dataType.getLength();
+	}
+
+	@Override
+	public int getAlignedLength() {
+		return dataType.getAlignedLength();
 	}
 
 	@Override

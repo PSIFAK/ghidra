@@ -80,7 +80,7 @@ public class FidDebugPlugin extends ProgramPlugin implements ChangeListener {
 	private DockingAction createRawFileAction;
 
 	public FidDebugPlugin(PluginTool tool) {
-		super(tool, true, true);
+		super(tool);
 	}
 
 	@Override
@@ -181,6 +181,7 @@ public class FidDebugPlugin extends ProgramPlugin implements ChangeListener {
 		chooser.setTitle("Where do you want to create the read-only installable database?");
 		chooser.setFileSelectionMode(GhidraFileChooserMode.DIRECTORIES_ONLY);
 		File selectedFile = chooser.getSelectedFile();
+		chooser.dispose();
 		if (selectedFile == null) {
 			return;
 		}
@@ -292,7 +293,6 @@ public class FidDebugPlugin extends ProgramPlugin implements ChangeListener {
 	 * @param choices array of choices for the users
 	 * @param defaultValue the default value to select
 	 * @return the user's choice, or null
-	 * @throws CancelledException if the user cancels
 	 */
 	protected <T> T askChoice(String title, String message, List<T> choices, T defaultValue) {
 		AskDialog<T> dialog =

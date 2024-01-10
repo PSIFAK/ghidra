@@ -329,8 +329,8 @@ public class VTControllerImpl
 			return;
 		}
 
-		currentMatchInfo = (match == null) ? null
-				: matchInfoFactory.getMatchInfo(this, match, addressCorrelatorManager);
+		currentMatchInfo =
+			(match == null) ? null : matchInfoFactory.getMatchInfo(match, addressCorrelatorManager);
 
 		fireMatchChanged(currentMatchInfo);
 	}
@@ -338,7 +338,7 @@ public class VTControllerImpl
 	@Override
 	public MatchInfo getMatchInfo(VTMatch match) {
 		return (match == null) ? null
-				: matchInfoFactory.getMatchInfo(this, match, addressCorrelatorManager);
+				: matchInfoFactory.getMatchInfo(match, addressCorrelatorManager);
 	}
 
 	private void fireSessionChanged() {
@@ -493,7 +493,7 @@ public class VTControllerImpl
 	}
 
 	private boolean hasTransactionsOpen(Program program, VtTask task) {
-		Transaction transaction = program.getCurrentTransaction();
+		TransactionInfo transaction = program.getCurrentTransactionInfo();
 		if (transaction != null) {
 			Msg.showWarn(this, null, "Unable to " + task.getTaskTitle(),
 				"The program \"" + program.getName() + "\"already has a transaction open: " +
@@ -501,7 +501,7 @@ public class VTControllerImpl
 			return true;
 		}
 
-		Transaction matchSetTransaction = session.getCurrentTransaction();
+		TransactionInfo matchSetTransaction = session.getCurrentTransactionInfo();
 		if (matchSetTransaction != null) {
 			Msg.showWarn(this, null, "Unable to " + task.getTaskTitle(),
 				"Transaction already open for the Match Set Manager ");
@@ -576,7 +576,7 @@ public class VTControllerImpl
 	}
 
 	@Override
-	public void transactionStarted(DomainObjectAdapterDB domainObj, Transaction tx) {
+	public void transactionStarted(DomainObjectAdapterDB domainObj, TransactionInfo tx) {
 		// don't care
 	}
 

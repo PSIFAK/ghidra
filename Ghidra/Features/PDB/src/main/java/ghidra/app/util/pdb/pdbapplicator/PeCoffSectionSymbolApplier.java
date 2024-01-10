@@ -15,10 +15,10 @@
  */
 package ghidra.app.util.pdb.pdbapplicator;
 
+import ghidra.app.util.bin.format.pdb2.pdbreader.MsSymbolIterator;
 import ghidra.app.util.bin.format.pdb2.pdbreader.PdbException;
 import ghidra.app.util.bin.format.pdb2.pdbreader.symbol.AbstractMsSymbol;
 import ghidra.app.util.bin.format.pdb2.pdbreader.symbol.PeCoffSectionMsSymbol;
-import ghidra.app.util.pdb.pdbapplicator.SymbolGroup.AbstractMsSymbolIterator;
 import ghidra.util.exception.AssertException;
 import ghidra.util.exception.CancelledException;
 
@@ -31,10 +31,10 @@ public class PeCoffSectionSymbolApplier extends MsSymbolApplier {
 
 	/**
 	 * Constructor
-	 * @param applicator the {@link PdbApplicator} for which we are working.
+	 * @param applicator the {@link DefaultPdbApplicator} for which we are working.
 	 * @param iter the Iterator containing the symbol sequence being processed
 	 */
-	public PeCoffSectionSymbolApplier(PdbApplicator applicator, AbstractMsSymbolIterator iter) {
+	public PeCoffSectionSymbolApplier(DefaultPdbApplicator applicator, MsSymbolIterator iter) {
 		super(applicator, iter);
 		AbstractMsSymbol abstractSymbol = iter.next();
 		if (!(abstractSymbol instanceof PeCoffSectionMsSymbol)) {
@@ -52,8 +52,11 @@ public class PeCoffSectionSymbolApplier extends MsSymbolApplier {
 		symbol.getCharacteristics();
 		symbol.getAlign();
 		symbol.getName();
-		applicator.putRealAddressesBySection(sectionNum, realAddress);
-		applicator.addMemorySectionRefinement(symbol);
+		// 20220712: The gathering of these and other Linker symbols has been moved to a special
+		// PdbApplicator method.
+		// We need to revisit what work we would like done here (and in PeCoffGroupSymbolApplier).
+//		applicator.putRealAddressesBySection(sectionNum, realAddress);
+//		applicator.addMemorySectionRefinement(symbol);
 	}
 
 	@Override

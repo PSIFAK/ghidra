@@ -76,8 +76,9 @@ public class ImportDataDirectory extends DataDirectory {
 
 	@Override
 	public void markup(Program program, boolean isBinary, TaskMonitor monitor, MessageLog log,
-			NTHeader ntHeader) throws DuplicateNameException, CodeUnitInsertionException,
-			DataTypeConflictException, IOException, MemoryAccessException {
+			NTHeader ntHeader)
+			throws DuplicateNameException, CodeUnitInsertionException, IOException,
+			MemoryAccessException {
 
 		if (imports == null || descriptors == null) {
 			return;
@@ -184,7 +185,7 @@ public class ImportDataDirectory extends DataDirectory {
 			dt = ntHeader.getOptionalHeader().is64bit() ? (DataType) QWORD : (DataType) DWORD;
 		}
 		else {
-			dt = PointerDataType.getPointer(null, -1);
+			dt = new PointerDataType(null, -1, program.getDataTypeManager());
 		}
 		AddressSpace space = program.getAddressFactory().getDefaultAddressSpace();
 		long thunkAddr = va(iatptr, isBinary);
@@ -204,7 +205,7 @@ public class ImportDataDirectory extends DataDirectory {
 
 		DataType dt = null;
 		if (intptr == iatptr && !isBinary) {
-			dt = PointerDataType.getPointer(null, program.getMinAddress().getPointerSize());
+			dt = new PointerDataType(null, -1, program.getDataTypeManager());
 		}
 		else {
 			dt = ntHeader.getOptionalHeader().is64bit() ? (DataType) QWORD : (DataType) DWORD;
@@ -337,7 +338,13 @@ public class ImportDataDirectory extends DataDirectory {
 				importList.add(
 					new ImportInfo(addr, cmt.toString(), dllName, boundName, id.isBound()));
 			}
-			id = new ImportDescriptor(reader, ptr);
+			try {
+				id = new ImportDescriptor(reader, ptr);
+			}
+			catch (IOException e) {
+				// Minimized PE may terminate import descriptors with end-of-file
+				break;
+			}
 		}
 
 		imports = new ImportInfo[importList.size()];

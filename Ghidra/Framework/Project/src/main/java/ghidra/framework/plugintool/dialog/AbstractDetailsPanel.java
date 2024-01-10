@@ -24,12 +24,11 @@ import javax.swing.text.SimpleAttributeSet;
 import javax.swing.text.StyleConstants;
 
 import docking.widgets.label.GDHtmlLabel;
+import generic.theme.GColor;
 import ghidra.util.HTMLUtilities;
 
 /**
- * Abstract class that defines a panel for displaying name/value pairs with html-formatting. 
- * <p>
- * This is used with the {@link ExtensionDetailsPanel} and the {@link PluginDetailsPanel}
+ * Abstract class that defines a panel for displaying name/value pairs with html-formatting.
  */
 public abstract class AbstractDetailsPanel extends JPanel {
 
@@ -118,7 +117,7 @@ public abstract class AbstractDetailsPanel extends JPanel {
 
 		textLabel.setVerticalAlignment(SwingConstants.TOP);
 		textLabel.setOpaque(true);
-		textLabel.setBackground(Color.WHITE);
+		textLabel.setBackground(new GColor("color.bg.panel.details"));
 		sp = new JScrollPane(textLabel);
 		sp.getVerticalScrollBar().setUnitIncrement(10);
 		sp.setPreferredSize(new Dimension(MIN_WIDTH, 200));

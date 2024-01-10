@@ -15,12 +15,10 @@
  */
 package ghidra.app.util.pdb.pdbapplicator;
 
+import ghidra.app.util.bin.format.pdb2.pdbreader.MsSymbolIterator;
 import ghidra.app.util.bin.format.pdb2.pdbreader.PdbException;
-import ghidra.app.util.bin.format.pdb2.pdbreader.symbol.AbstractMsSymbol;
-import ghidra.app.util.bin.format.pdb2.pdbreader.symbol.EndMsSymbol;
-import ghidra.app.util.pdb.pdbapplicator.SymbolGroup.AbstractMsSymbolIterator;
+import ghidra.app.util.bin.format.pdb2.pdbreader.symbol.*;
 import ghidra.util.exception.AssertException;
-import ghidra.util.exception.CancelledException;
 
 /**
  * Applier for {@link EndMsSymbol} symbols.
@@ -29,14 +27,14 @@ public class EndSymbolApplier extends MsSymbolApplier {
 
 	/**
 	 * Constructor
-	 * @param applicator the {@link PdbApplicator} for which we are working.
+	 * @param applicator the {@link DefaultPdbApplicator} for which we are working.
 	 * @param iter the Iterator containing the symbol sequence being processed
-	 * @throws CancelledException upon user cancellation
 	 */
-	public EndSymbolApplier(PdbApplicator applicator, AbstractMsSymbolIterator iter) {
+	public EndSymbolApplier(DefaultPdbApplicator applicator, MsSymbolIterator iter) {
 		super(applicator, iter);
 		AbstractMsSymbol abstractSymbol = iter.next();
-		if (!(abstractSymbol instanceof EndMsSymbol)) {
+		if (!(abstractSymbol instanceof EndMsSymbol ||
+			abstractSymbol instanceof ProcedureIdEndMsSymbol)) {
 			throw new AssertException(
 				"Invalid symbol type: " + abstractSymbol.getClass().getSimpleName());
 		}
@@ -45,8 +43,8 @@ public class EndSymbolApplier extends MsSymbolApplier {
 	@Override
 	void apply() throws PdbException {
 		pdbLogAndInfoMessage(this,
-			String.format("Cannot apply %s directly to program (module:0X%04X, offset:0X%08X)",
-				this.getClass().getSimpleName(), iter.getModuleNumber(), iter.getCurrentOffset()));
+			String.format("Cannot apply %s directly to program (stream:0X%04X, offset:0X%08X)",
+				this.getClass().getSimpleName(), iter.getStreamNumber(), iter.getCurrentOffset()));
 	}
 
 	@Override

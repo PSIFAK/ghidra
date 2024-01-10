@@ -22,11 +22,17 @@ import ghidra.dbg.util.PathUtils.PathComparator;
 import ghidra.trace.model.target.*;
 
 public class DBTraceObjectValPath implements TraceObjectValPath {
-	static DBTraceObjectValPath of(Collection<InternalTraceObjectValue> entryList) {
+	public static final DBTraceObjectValPath EMPTY = new DBTraceObjectValPath(List.of());
+
+	public static DBTraceObjectValPath of() {
+		return EMPTY;
+	}
+
+	public static DBTraceObjectValPath of(Collection<InternalTraceObjectValue> entryList) {
 		return new DBTraceObjectValPath(List.copyOf(entryList));
 	}
 
-	static DBTraceObjectValPath of(InternalTraceObjectValue... entries) {
+	public static DBTraceObjectValPath of(InternalTraceObjectValue... entries) {
 		return DBTraceObjectValPath.of(Arrays.asList(entries));
 	}
 
@@ -66,21 +72,35 @@ public class DBTraceObjectValPath implements TraceObjectValPath {
 		return entryList.contains(entry);
 	}
 
+	@Override
 	public DBTraceObjectValPath prepend(TraceObjectValue entry) {
+		if (!entryList.isEmpty() && entry.getTrace() != entryList.get(0).getTrace()) {
+			throw new IllegalArgumentException("All values in path must be from the same trace");
+		}
+		if (!(entry instanceof InternalTraceObjectValue val)) {
+			throw new IllegalArgumentException("Value must be in the database");
+		}
 		InternalTraceObjectValue[] arr = new InternalTraceObjectValue[1 + entryList.size()];
-		arr[0] = (DBTraceObjectValue) entry;
+		arr[0] = val;
 		for (int i = 1; i < arr.length; i++) {
 			arr[i] = entryList.get(i - 1);
 		}
 		return new DBTraceObjectValPath(Collections.unmodifiableList(Arrays.asList(arr)));
 	}
 
+	@Override
 	public DBTraceObjectValPath append(TraceObjectValue entry) {
+		if (!entryList.isEmpty() && entry.getTrace() != entryList.get(0).getTrace()) {
+			throw new IllegalArgumentException("All values in path must be from the same trace");
+		}
+		if (!(entry instanceof InternalTraceObjectValue val)) {
+			throw new IllegalArgumentException("Value must be in the database");
+		}
 		InternalTraceObjectValue[] arr = new InternalTraceObjectValue[1 + entryList.size()];
 		for (int i = 0; i < arr.length - 1; i++) {
 			arr[i] = entryList.get(i);
 		}
-		arr[arr.length - 1] = (InternalTraceObjectValue) entry;
+		arr[arr.length - 1] = val;
 		return new DBTraceObjectValPath(Collections.unmodifiableList(Arrays.asList(arr)));
 	}
 
@@ -93,7 +113,7 @@ public class DBTraceObjectValPath implements TraceObjectValPath {
 	}
 
 	@Override
-	public TraceObject getFirstParent(TraceObject ifEmpty) {
+	public TraceObject getSource(TraceObject ifEmpty) {
 		InternalTraceObjectValue first = getFirstEntry();
 		return first == null ? ifEmpty : first.getParent();
 	}
@@ -107,13 +127,13 @@ public class DBTraceObjectValPath implements TraceObjectValPath {
 	}
 
 	@Override
-	public Object getLastValue(Object ifEmpty) {
+	public Object getDestinationValue(Object ifEmpty) {
 		InternalTraceObjectValue last = getLastEntry();
 		return last == null ? ifEmpty : last.getValue();
 	}
 
 	@Override
-	public TraceObject getLastChild(TraceObject ifEmpty) {
+	public TraceObject getDestination(TraceObject ifEmpty) {
 		InternalTraceObjectValue last = getLastEntry();
 		return last == null ? ifEmpty : last.getChild();
 	}

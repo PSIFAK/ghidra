@@ -61,7 +61,7 @@ public class ScalarSearchPlugin extends ProgramPlugin implements DomainObjectLis
 	private Set<ScalarSearchProvider> providers = new HashSet<>();
 
 	public ScalarSearchPlugin(PluginTool tool) {
-		super(tool, true, true);
+		super(tool);
 
 		reloadUpdateMgr =
 			new SwingUpdateManager(1000, 60000, () -> providers.forEach(p -> p.reload()));
@@ -148,7 +148,8 @@ public class ScalarSearchPlugin extends ProgramPlugin implements DomainObjectLis
 
 		searchAction.setHelpLocation(new HelpLocation(this.getName(), "Scalar_Search"));
 		searchAction.setMenuBarData(new MenuData(
-			new String[] { ToolConstants.MENU_SEARCH, "For Scalars..." }, null, "search for"));
+			new String[] { ToolConstants.MENU_SEARCH, "For Scalars..." }, null, "search for", -1,
+			"Scalars"));
 		searchAction.setDescription("Search program for scalars");
 		searchAction.addToWindowWhen(NavigatableActionContext.class);
 		tool.addAction(searchAction);

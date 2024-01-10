@@ -30,6 +30,8 @@ import docking.widgets.OptionDialog;
 import docking.widgets.button.GRadioButton;
 import docking.widgets.fieldpanel.support.FieldSelection;
 import docking.widgets.label.GDLabel;
+import generic.theme.GThemeDefaults.Colors.Palette;
+import generic.theme.GThemeDefaults.Colors.Viewport;
 import ghidra.app.plugin.core.compositeeditor.BitFieldPlacementComponent.BitAttributes;
 import ghidra.program.model.data.*;
 import ghidra.program.model.data.Composite;
@@ -88,7 +90,7 @@ public class CompEditorPanel extends CompositeEditorPanel {
 	/**
 	 * Constructor for a panel that has a blank line in unlocked mode and
 	 * composite name and description that are editable.
-	 * 
+	 *
 	 * @param model
 	 *            the model for editing the composite data type
 	 * @param provider
@@ -221,7 +223,7 @@ public class CompEditorPanel extends CompositeEditorPanel {
 			new JScrollPane(bitViewComponent, ScrollPaneConstants.VERTICAL_SCROLLBAR_NEVER,
 				ScrollPaneConstants.HORIZONTAL_SCROLLBAR_AS_NEEDED);
 
-		bitViewScrollPane.getViewport().setBackground(getBackground());
+		bitViewScrollPane.getViewport().setBackground(Viewport.UNEDITABLE_BACKGROUND);
 		bitViewScrollPane.setBorder(null);
 
 		// establish default preferred size of panel based upon fixed preferred height of bitViewComponent
@@ -236,7 +238,7 @@ public class CompEditorPanel extends CompositeEditorPanel {
 	 * Create the Info Panel that is horizontally resizable. The panel contains
 	 * the name, category, data type, size, and edit mode for the current
 	 * structure in the editor.
-	 * 
+	 *
 	 * @return JPanel the completed composite data type information panel
 	 */
 	@Override
@@ -349,8 +351,8 @@ public class CompEditorPanel extends CompositeEditorPanel {
 
 	@Override
 	public Dimension getPreferredSize() {
-		// make sure our preferred size accounts for that of our components that the user 
-		// may choose to show 
+		// make sure our preferred size accounts for that of our components that the user
+		// may choose to show
 		Dimension preferredSize = super.getPreferredSize();
 		if (alignPanel.isShowing()) {
 			return preferredSize;
@@ -394,7 +396,8 @@ public class CompEditorPanel extends CompositeEditorPanel {
 		String alignmentToolTip =
 			"<HTML>The <B>align</B> control allows the overall minimum alignment of this<BR>" +
 				"data type to be specified.  The actual computed alignment<BR>" +
-				"may be any multiple of this value.   <font color=blue size=\"-2\">(&lt;F1&gt; for help)</HTML>";
+				"may be any multiple of this value.   " + "<font color=\"" +
+				Palette.BLUE.toHexString() + "\" size=\"-2\">(&lt;F1&gt; for help)</HTML>";
 		alignPanel.setToolTipText(alignmentToolTip);
 
 		addMinimumAlignmentComponents();
@@ -446,11 +449,10 @@ public class CompEditorPanel extends CompositeEditorPanel {
 
 	private void setupDefaultMinAlignButton() {
 		defaultAlignButton.setName("Default Alignment");
-		String alignmentToolTip =
-			"<HTML>Sets this data type to use <B>default</B> alignment.<BR>" +
-				"If packing is disabled, the default will be 1 byte.  If packing<BR>" +
-				"is enabled, the alignment is computed based upon the pack<BR>" +
-				"setting and the alignment of each component data type.</HTML>";
+		String alignmentToolTip = "<HTML>Sets this data type to use <B>default</B> alignment.<BR>" +
+			"If packing is disabled, the default will be 1 byte.  If packing<BR>" +
+			"is enabled, the alignment is computed based upon the pack<BR>" +
+			"setting and the alignment of each component data type.</HTML>";
 
 		defaultAlignButton.addActionListener(e -> {
 			((CompEditorModel) model).setAlignmentType(AlignmentType.DEFAULT, -1);
@@ -458,8 +460,8 @@ public class CompEditorPanel extends CompositeEditorPanel {
 
 		defaultAlignButton.setToolTipText(alignmentToolTip);
 		if (helpManager != null) {
-			helpManager.registerHelp(defaultAlignButton, new HelpLocation(
-				provider.getHelpTopic(), provider.getHelpName() + "_" + "Align"));
+			helpManager.registerHelp(defaultAlignButton,
+				new HelpLocation(provider.getHelpTopic(), provider.getHelpName() + "_" + "Align"));
 		}
 	}
 
@@ -477,8 +479,8 @@ public class CompEditorPanel extends CompositeEditorPanel {
 		});
 
 		if (helpManager != null) {
-			helpManager.registerHelp(machineAlignButton, new HelpLocation(
-				provider.getHelpTopic(), provider.getHelpName() + "_" + "Align"));
+			helpManager.registerHelp(machineAlignButton,
+				new HelpLocation(provider.getHelpTopic(), provider.getHelpName() + "_" + "Align"));
 		}
 	}
 
@@ -495,8 +497,8 @@ public class CompEditorPanel extends CompositeEditorPanel {
 		});
 
 		if (helpManager != null) {
-			helpManager.registerHelp(explicitAlignButton, new HelpLocation(
-				provider.getHelpTopic(), provider.getHelpName() + "_" + "Align"));
+			helpManager.registerHelp(explicitAlignButton,
+				new HelpLocation(provider.getHelpTopic(), provider.getHelpName() + "_" + "Align"));
 		}
 
 		explicitAlignTextField.setName("Explicit Alignment Value");
@@ -521,8 +523,8 @@ public class CompEditorPanel extends CompositeEditorPanel {
 
 		explicitAlignTextField.setToolTipText(alignmentToolTip);
 		if (helpManager != null) {
-			helpManager.registerHelp(explicitAlignTextField, new HelpLocation(
-				provider.getHelpTopic(), provider.getHelpName() + "_" + "Align"));
+			helpManager.registerHelp(explicitAlignTextField,
+				new HelpLocation(provider.getHelpTopic(), provider.getHelpName() + "_" + "Align"));
 		}
 
 		refreshGUIMinimumAlignmentValue(); // Display the initial value.
@@ -570,7 +572,8 @@ public class CompEditorPanel extends CompositeEditorPanel {
 		infoPanel.add(actualAlignmentPanel, gridBagConstraints);
 
 		actualAlignmentValueTextField = new JTextField(8);
-		actualAlignmentValueTextField.setText("" + ((CompEditorModel) model).getActualAlignment());
+		actualAlignmentValueTextField
+				.setText(Integer.toString(((CompEditorModel) model).getActualAlignment()));
 		actualAlignmentValueTextField.setToolTipText(actualAlignmentToolTip);
 		actualAlignmentValueTextField.setEditable(false);
 		if (helpManager != null) {
@@ -586,7 +589,7 @@ public class CompEditorPanel extends CompositeEditorPanel {
 		gridBagConstraints.gridx = 3;
 		gridBagConstraints.gridy = 3;
 		infoPanel.add(actualAlignmentValueTextField, gridBagConstraints);
-		actualAlignmentValueTextField.setBackground(new Color(getBackground().getRGB()));
+		actualAlignmentValueTextField.setBackground(getBackground());
 	}
 
 	private void setupPacking() {
@@ -616,8 +619,8 @@ public class CompEditorPanel extends CompositeEditorPanel {
 		packingGroup.add(explicitPackingButton);
 
 		if (helpManager != null) {
-			helpManager.registerHelp(packingPanel, new HelpLocation(provider.getHelpTopic(),
-				provider.getHelpName() + "_" + "Pack"));
+			helpManager.registerHelp(packingPanel,
+				new HelpLocation(provider.getHelpTopic(), provider.getHelpName() + "_" + "Pack"));
 		}
 
 		addPackingComponents(innerPanel);
@@ -669,8 +672,10 @@ public class CompEditorPanel extends CompositeEditorPanel {
 	private void setupPackingEnablementButton() {
 		packingEnablementButton.setName("Packing Enablement");
 		String packingToolTipText =
-			"<HTML>Enable packing when details of all components are known (including sizing and alignment).<BR>" +
-				"Disable packing when Reverse Engineering composite.   <font color=blue size=\"-2\">(&lt;F1&gt; for help)</font></HTML>";
+			"<HTML>Enable packing when details of all components are known (including sizing and" +
+				" alignment).<BR>" + "Disable packing when Reverse Engineering composite.   " +
+				"<font color=\"" + Palette.BLUE.toHexString() +
+				"\" size=\"-2\">(&lt;F1&gt; for help)</font></HTML>";
 		packingEnablementButton.addActionListener(e -> {
 			((CompEditorModel) model).setPackingType(
 				packingEnablementButton.isSelected() ? PackingType.DEFAULT : PackingType.DISABLED,
@@ -695,8 +700,8 @@ public class CompEditorPanel extends CompositeEditorPanel {
 
 		defaultPackingButton.setToolTipText(packingToolTipText);
 		if (helpManager != null) {
-			helpManager.registerHelp(defaultPackingButton, new HelpLocation(provider.getHelpTopic(),
-				provider.getHelpName() + "_" + "Pack"));
+			helpManager.registerHelp(defaultPackingButton,
+				new HelpLocation(provider.getHelpTopic(), provider.getHelpName() + "_" + "Pack"));
 		}
 	}
 
@@ -708,8 +713,8 @@ public class CompEditorPanel extends CompositeEditorPanel {
 		explicitPackingButton.addActionListener(e -> chooseByValuePacking());
 		explicitPackingButton.setToolTipText(packingToolTipText);
 		if (helpManager != null) {
-			helpManager.registerHelp(explicitPackingButton, new HelpLocation(provider.getHelpTopic(),
-				provider.getHelpName() + "_" + "Pack"));
+			helpManager.registerHelp(explicitPackingButton,
+				new HelpLocation(provider.getHelpTopic(), provider.getHelpName() + "_" + "Pack"));
 		}
 
 		explicitPackingTextField.setName("Packing Value");
@@ -734,8 +739,8 @@ public class CompEditorPanel extends CompositeEditorPanel {
 
 		explicitPackingTextField.setToolTipText(packingToolTipText);
 		if (helpManager != null) {
-			helpManager.registerHelp(explicitPackingTextField, new HelpLocation(
-				provider.getHelpTopic(), provider.getHelpName() + "_" + "Pack"));
+			helpManager.registerHelp(explicitPackingTextField,
+				new HelpLocation(provider.getHelpTopic(), provider.getHelpName() + "_" + "Pack"));
 		}
 	}
 
@@ -831,7 +836,7 @@ public class CompEditorPanel extends CompositeEditorPanel {
 		}
 		else {
 			// not editable - use same background as panel
-			sizeTextField.setBackground(new Color(getBackground().getRGB()));
+			sizeTextField.setBackground(getBackground());
 		}
 	}
 
@@ -971,8 +976,7 @@ public class CompEditorPanel extends CompositeEditorPanel {
 			if (viewComposite.isPackingEnabled()) {
 				defaultValue = viewComposite.getDataOrganization().getMachineAlignment();
 			}
-			((CompEditorModel) model).setAlignmentType(AlignmentType.EXPLICIT,
-				defaultValue);
+			((CompEditorModel) model).setAlignmentType(AlignmentType.EXPLICIT, defaultValue);
 		}
 		explicitAlignTextField.selectAll();
 		explicitAlignTextField.requestFocus();
@@ -1064,7 +1068,7 @@ public class CompEditorPanel extends CompositeEditorPanel {
 
 	/**
 	 * Sets the currently displayed structure category name.
-	 * 
+	 *
 	 * @param name
 	 *            the new category name
 	 */
@@ -1082,7 +1086,7 @@ public class CompEditorPanel extends CompositeEditorPanel {
 
 	/**
 	 * Sets the currently displayed structure name in the edit area.
-	 * 
+	 *
 	 * @param name
 	 *            the new name
 	 */
@@ -1107,7 +1111,7 @@ public class CompEditorPanel extends CompositeEditorPanel {
 
 	/**
 	 * Sets the currently displayed structure description.
-	 * 
+	 *
 	 * @param description
 	 *            the new description
 	 */
@@ -1156,7 +1160,7 @@ public class CompEditorPanel extends CompositeEditorPanel {
 
 	/**
 	 * Sets the currently displayed composite's size.
-	 * 
+	 *
 	 * @param size the new size
 	 */
 	public void setCompositeSize(int size) {

@@ -18,14 +18,12 @@ package ghidra.trace.model.time.schedule;
 import java.math.BigInteger;
 import java.util.*;
 import java.util.Map.Entry;
-import java.util.function.Consumer;
 import java.util.stream.Stream;
 
 import javax.help.UnsupportedOperationException;
 
-import com.google.common.collect.*;
-import com.google.common.primitives.UnsignedLong;
-
+import generic.ULongSpan;
+import generic.ULongSpan.*;
 import ghidra.app.plugin.processors.sleigh.SleighLanguage;
 import ghidra.generic.util.datastruct.SemisparseByteArray;
 import ghidra.pcode.emu.PcodeThread;
@@ -44,7 +42,21 @@ public class PatchStep implements Step {
 	protected String sleigh;
 	protected int hashCode;
 
-	public static String generateSleigh(Language language, Address address, byte[] data,
+	/**
+	 * Generate a single line of Sleigh
+	 * 
+	 * <p>
+	 * Note that when length is greater than 8, this will generate constants which are too large for
+	 * the Java implementation of Sleigh. Use {@link #generateSleigh(Language, Address, byte[])}
+	 * instead to write the variable in chunks.
+	 * 
+	 * @param language the target language
+	 * @param address the (start) address of the variable
+	 * @param data the bytes to write to the variable
+	 * @param length the length of the variable
+	 * @return the Sleigh code
+	 */
+	public static String generateSleighLine(Language language, Address address, byte[] data,
 			int length) {
 		BigInteger value = Utils.bytesToBigInteger(data, length, language.isBigEndian(), false);
 		if (address.isMemoryAddress()) {
@@ -67,8 +79,34 @@ public class PatchStep implements Step {
 		return String.format("%s=0x%s", register, value.toString(16));
 	}
 
-	public static String generateSleigh(Language language, Address address, byte[] data) {
-		return generateSleigh(language, address, data, data.length);
+	/**
+	 * Generate a single line of Sleigh
+	 * 
+	 * @see #generateSleighLine(Language, Address, byte[], int)
+	 */
+	public static String generateSleighLine(Language language, Address address, byte[] data) {
+		return generateSleighLine(language, address, data, data.length);
+	}
+
+	/**
+	 * Generate multiple lines of Sleigh, all to set a single variable
+	 * 
+	 * @param language the target language
+	 * @param address the (start) address of the variable
+	 * @param data the bytes to write to the variable
+	 * @return the lines of Sleigh code
+	 */
+	public static List<String> generateSleigh(Language language, Address address, byte[] data) {
+		List<String> result = new ArrayList<>();
+		generateSleigh(result, language, address, data);
+		return result;
+	}
+
+	protected static void generateSleigh(List<String> result, Language language, Address address,
+			byte[] data) {
+		SemisparseByteArray array = new SemisparseByteArray(); // TODO: Seems heavy-handed
+		array.putData(address.getOffset(), data);
+		generateSleigh(result, language, address.getAddressSpace(), array);
 	}
 
 	protected static List<String> generateSleigh(Language language,
@@ -93,38 +131,34 @@ public class PatchStep implements Step {
 	protected static void generateMemorySleigh(List<String> result, Language language,
 			AddressSpace space, SemisparseByteArray array) {
 		byte[] data = new byte[8];
-		for (Range<UnsignedLong> range : array.getInitialized(0, -1).asRanges()) {
-			assert range.lowerBoundType() == BoundType.CLOSED;
-			Address start = space.getAddress(range.lowerEndpoint().longValue());
-			Address end = space.getAddress(range.upperEndpoint().longValue() -
-				(range.upperBoundType() == BoundType.OPEN ? 1 : 0));
+		for (ULongSpan span : array.getInitialized(0, -1).spans()) {
+			Address start = space.getAddress(span.min());
+			Address end = space.getAddress(span.max());
 			for (AddressRange chunk : new AddressRangeChunker(start, end, data.length)) {
 				Address min = chunk.getMinAddress();
 				int length = (int) chunk.getLength();
 				array.getData(min.getOffset(), data, 0, length);
-				result.add(generateSleigh(language, min, data, length));
+				result.add(generateSleighLine(language, min, data, length));
 			}
 		}
 	}
 
-	protected static Range<UnsignedLong> rangeOfRegister(Register r) {
-		long lower = r.getAddress().getOffset();
-		long upper = lower + r.getNumBytes();
-		return Range.closedOpen(UnsignedLong.fromLongBits(lower), UnsignedLong.fromLongBits(upper));
+	protected static ULongSpan spanOfRegister(Register r) {
+		return ULongSpan.extent(r.getAddress().getOffset(), r.getNumBytes());
 	}
 
-	protected static boolean isContained(Register r, RangeSet<UnsignedLong> remains) {
-		return remains.encloses(rangeOfRegister(r));
+	protected static boolean isContained(Register r, ULongSpanSet remains) {
+		return remains.encloses(spanOfRegister(r));
 	}
 
 	protected static void generateRegisterSleigh(List<String> result, Language language,
 			AddressSpace space, SemisparseByteArray array) {
 		byte[] data = new byte[8];
-		RangeSet<UnsignedLong> remains = TreeRangeSet.create(array.getInitialized(0, -1));
+		MutableULongSpanSet remains = new DefaultULongSpanSet();
+		remains.addAll(array.getInitialized(0, -1));
 		while (!remains.isEmpty()) {
-			Range<UnsignedLong> span = remains.span();
-			assert span.lowerBoundType() == BoundType.CLOSED;
-			Address min = space.getAddress(span.lowerEndpoint().longValue());
+			ULongSpan bound = remains.bound();
+			Address min = space.getAddress(bound.min());
 			Register register = Stream.of(language.getRegisters(min))
 					.filter(r -> r.getAddress().equals(min))
 					.filter(r -> r.getNumBytes() <= data.length)
@@ -139,7 +173,7 @@ public class PatchStep implements Step {
 			array.getData(min.getOffset(), data, 0, length);
 			BigInteger value = Utils.bytesToBigInteger(data, length, language.isBigEndian(), false);
 			result.add(String.format("%s=0x%s", register, value.toString(16)));
-			remains.remove(rangeOfRegister(register));
+			remains.remove(spanOfRegister(register));
 		}
 	}
 
@@ -194,9 +228,8 @@ public class PatchStep implements Step {
 	}
 
 	@Override
-	public int getTypeOrder() {
-		// When comparing sequences, those with sleigh steps are ordered after those with ticks
-		return 10;
+	public StepType getType() {
+		return StepType.PATCH;
 	}
 
 	@Override
@@ -274,10 +307,9 @@ public class PatchStep implements Step {
 	}
 
 	@Override
-	public <T> void execute(PcodeThread<T> emuThread, Consumer<PcodeThread<T>> stepAction,
-			TaskMonitor monitor) throws CancelledException {
-		PcodeProgram prog = emuThread.getMachine().compileSleigh("schedule", List.of(sleigh + ";"));
-		emuThread.getExecutor().execute(prog, emuThread.getUseropLibrary());
+	public <T> void execute(PcodeThread<T> emuThread, Stepper stepper, TaskMonitor monitor)
+			throws CancelledException {
+		emuThread.stepPatch(sleigh);
 	}
 
 	@Override
@@ -330,7 +362,7 @@ public class PatchStep implements Step {
 
 	protected Map<AddressSpace, SemisparseByteArray> getPatches(Language language) {
 		PcodeProgram prog = SleighProgramCompiler.compileProgram((SleighLanguage) language,
-			"schedule", List.of(sleigh + ";"), SleighUseropLibrary.nil());
+			"schedule", sleigh + ";", PcodeUseropLibrary.nil());
 		// SemisparseArray is a bit overkill, no?
 		Map<AddressSpace, SemisparseByteArray> result = new TreeMap<>();
 		for (PcodeOp op : prog.getCode()) {

@@ -17,12 +17,9 @@ package ghidra.app.plugin.core.debug.gui.memview;
 
 import java.util.*;
 
-import com.google.common.collect.Range;
-
-import ghidra.app.plugin.core.debug.DebuggerCoordinates;
-import ghidra.app.services.TraceRecorder;
 import ghidra.async.AsyncDebouncer;
 import ghidra.async.AsyncTimer;
+import ghidra.debug.api.tracemgr.DebuggerCoordinates;
 import ghidra.program.model.address.*;
 import ghidra.trace.model.*;
 import ghidra.trace.model.Trace.*;
@@ -40,7 +37,6 @@ public class DebuggerMemviewTraceListener extends TraceDomainObjectListener {
 	protected MemviewProvider provider;
 	DebuggerCoordinates current = DebuggerCoordinates.NOWHERE;
 	Trace currentTrace;
-	TraceRecorder currentRecorder;
 
 	private boolean trackTrace = false;
 	private boolean trackThreads = true;
@@ -156,10 +152,9 @@ public class DebuggerMemviewTraceListener extends TraceDomainObjectListener {
 		if (!trackBytes || !trackTrace) {
 			return;
 		}
-		Range<Long> lifespan = range.getLifespan();
-		Range<Long> newspan = Range.closedOpen(lifespan.lowerEndpoint(), lifespan.lowerEndpoint());
+		Lifespan lifespan = range.getLifespan();
 		MemoryBox box = new MemoryBox("BytesChanged " + range.description(),
-			MemviewBoxType.WRITE_MEMORY, range.getRange(), newspan);
+			MemviewBoxType.WRITE_MEMORY, range.getRange(), lifespan);
 		updateList.add(box);
 		updateLabelDebouncer.contact(null);
 	}
@@ -199,7 +194,8 @@ public class DebuggerMemviewTraceListener extends TraceDomainObjectListener {
 
 	protected DebuggerCoordinates adjustCoordinates(DebuggerCoordinates coordinates) {
 		// Because the view's snap is changing with or without us.... So go with.
-		return current.withSnap(coordinates.getSnap());
+		// i.e., take the time, but not the thread
+		return current.time(coordinates.getTime());
 	}
 
 	public void coordinatesActivated(DebuggerCoordinates coordinates) {
@@ -232,6 +228,9 @@ public class DebuggerMemviewTraceListener extends TraceDomainObjectListener {
 	private void processTrace(Trace trace) {
 		updateList.clear();
 		provider.reset();
+		if (!provider.isVisible()) {
+			return;
+		}
 		TraceThreadManager threadManager = trace.getThreadManager();
 		for (TraceThread thread : threadManager.getAllThreads()) {
 			threadChanged(thread);

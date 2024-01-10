@@ -724,9 +724,7 @@ public class AddressSet implements AddressSetView {
 			entry = rbTree.getFirst();
 		}
 
-		Iterator<AddressRange> iterator = addrSet.iterator();
-		while (iterator.hasNext()) {
-			AddressRange range = iterator.next();
+		for (AddressRange range : addrSet) {
 			while (range.compareTo(entry.getValue()) > 0) {
 				entry = entry.getSuccessor();
 				if (entry == null) {
@@ -746,9 +744,7 @@ public class AddressSet implements AddressSetView {
 		if (entry == null) {
 			return false;
 		}
-		Iterator<AddressRange> iterator = addrSet.iterator();
-		while (iterator.hasNext()) {
-			AddressRange range = iterator.next();
+		for (AddressRange range : addrSet) {
 			while (range.compareTo(entry.getValue()) > 0) {
 				entry = entry.getSuccessor();
 				if (entry == null) {
@@ -1249,6 +1245,9 @@ public class AddressSet implements AddressSetView {
 		@Override
 		public AddressRange next() {
 			RedBlackEntry<Address, Address> next = iterator.next();
+			if (next == null) {
+				throw new NoSuchElementException();
+			}
 			return new AddressRangeImpl(next.getKey(), next.getValue());
 		}
 

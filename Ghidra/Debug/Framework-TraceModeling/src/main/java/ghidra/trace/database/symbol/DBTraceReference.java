@@ -18,13 +18,11 @@ package ghidra.trace.database.symbol;
 import java.util.Collection;
 import java.util.Objects;
 
-import com.google.common.collect.Range;
-
 import ghidra.program.model.address.Address;
 import ghidra.program.model.symbol.*;
 import ghidra.trace.database.DBTrace;
-import ghidra.trace.database.DBTraceUtils;
 import ghidra.trace.database.symbol.DBTraceReferenceSpace.DBTraceReferenceEntry;
+import ghidra.trace.model.Lifespan;
 import ghidra.trace.model.Trace.TraceReferenceChangeType;
 import ghidra.trace.model.Trace.TraceSymbolChangeType;
 import ghidra.trace.model.symbol.*;
@@ -69,13 +67,13 @@ public class DBTraceReference implements TraceReference {
 	}
 
 	@Override
-	public Range<Long> getLifespan() {
+	public Lifespan getLifespan() {
 		return ent.getLifespan();
 	}
 
 	@Override
 	public long getStartSnap() {
-		return DBTraceUtils.lowerEndpoint(getLifespan());
+		return getLifespan().lmin();
 	}
 
 	@Override
@@ -153,32 +151,14 @@ public class DBTraceReference implements TraceReference {
 				return;
 			}
 			Address toAddress = getToAddress();
-			if (dbSym instanceof AbstractDBTraceVariableSymbol) {
-				AbstractDBTraceVariableSymbol varSym = (AbstractDBTraceVariableSymbol) dbSym;
-				// Variables' lifespans are governed by the parent function.
-				// Globals span all time.
-				DBTraceNamespaceSymbol parent = varSym.getParentNamespace();
-				if (parent instanceof TraceSymbolWithLifespan) {
-					TraceSymbolWithLifespan symWl = (TraceSymbolWithLifespan) parent;
-					if (!symWl.getLifespan().isConnected(getLifespan())) {
-						throw new IllegalArgumentException(
-							"Associated symbol and reference must have connected lifespans");
-					}
-				}
-				if (!varSym.getVariableStorage().contains(toAddress)) {
-					throw new IllegalArgumentException(String.format(
-						"Variable symbol storage of '%s' must contain Reference's to address (%s)",
-						varSym.getName(), toAddress));
-				}
-			}
-			else if (!Objects.equals(symbol.getAddress(), toAddress)) {
+			if (!Objects.equals(symbol.getAddress(), toAddress)) {
 				throw new IllegalArgumentException(String.format(
 					"Symbol address (%s) of '%s' must match Reference's to address (%s)",
 					symbol.getAddress(), symbol.getName(), toAddress));
 			}
 			if (symbol instanceof TraceSymbolWithLifespan) {
 				TraceSymbolWithLifespan symWl = (TraceSymbolWithLifespan) symbol;
-				if (!symWl.getLifespan().isConnected(getLifespan())) {
+				if (!symWl.getLifespan().intersects(getLifespan())) {
 					throw new IllegalArgumentException(
 						"Associated symbol and reference must have connected lifespans");
 				}

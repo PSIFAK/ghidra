@@ -18,10 +18,8 @@ package ghidra.app.util.pdb.pdbapplicator;
 import java.util.Objects;
 
 import ghidra.app.plugin.processors.sleigh.symbol.Symbol;
-import ghidra.app.util.bin.format.pdb2.pdbreader.PdbException;
-import ghidra.app.util.bin.format.pdb2.pdbreader.PdbLog;
+import ghidra.app.util.bin.format.pdb2.pdbreader.*;
 import ghidra.app.util.bin.format.pdb2.pdbreader.symbol.AbstractMsSymbol;
-import ghidra.app.util.pdb.pdbapplicator.SymbolGroup.AbstractMsSymbolIterator;
 import ghidra.util.exception.CancelledException;
 
 /**
@@ -32,16 +30,16 @@ import ghidra.util.exception.CancelledException;
  * make fields available to the user from the {@link AbstractMsSymbol}.
  */
 public abstract class MsSymbolApplier {
-	protected PdbApplicator applicator;
-	protected AbstractMsSymbolIterator iter;
+	protected DefaultPdbApplicator applicator;
+	protected MsSymbolIterator iter;
 	protected long currentOffset;
 
 	/**
 	 * Constructor
-	 * @param applicator the {@link PdbApplicator} for which we are working.
+	 * @param applicator the {@link DefaultPdbApplicator} for which we are working.
 	 * @param iter the Iterator containing the symbol sequence being processed
 	 */
-	public MsSymbolApplier(PdbApplicator applicator, AbstractMsSymbolIterator iter) {
+	public MsSymbolApplier(DefaultPdbApplicator applicator, MsSymbolIterator iter) {
 		Objects.requireNonNull(applicator, "applicator cannot be null");
 		Objects.requireNonNull(iter, "iter cannot be null");
 		this.applicator = applicator;
@@ -86,7 +84,7 @@ public abstract class MsSymbolApplier {
 	/**
 	 * Manages block nesting for symbols/appliers that represent the beginning or end of blocks.
 	 * The default is to do nothing.  Otherwise the appliers should implement the appropriate
-	 * logic.  
+	 * logic.
 	 * @param applierParam the applier which is managing blocks, which is typically
 	 * {@link FunctionSymbolApplier}.
 	 */

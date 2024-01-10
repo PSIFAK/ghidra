@@ -17,10 +17,12 @@
 /// \brief Utilities for making references to \b dynamic variables: defined as
 /// locations and constants that can only be identified by their context within the data-flow graph.
 
-#ifndef __CPUI_DYNAMIC__
-#define __CPUI_DYNAMIC__
+#ifndef __DYNAMIC_HH__
+#define __DYNAMIC_HH__
 
 #include "varnode.hh"
+
+namespace ghidra {
 
 /// \brief An edge between a Varnode and a PcodeOp
 ///
@@ -76,6 +78,8 @@ class DynamicHash {
   void gatherUnmarkedVn(void);		///< Move staged Varnodes into the sub-graph and mark them
   void gatherUnmarkedOp(void);		///< Mark any new PcodeOps in the sub-graph
   void pieceTogetherHash(const Varnode *root,uint4 method);	///< Clean-up and piece together formal hash value
+  static void moveOffSkip(const PcodeOp *&op,int4 &slot);	///< Convert given PcodeOp to a non-skip op by following data-flow
+  static void dedupVarnodes(vector<Varnode *> &varlist);	///< Remove any duplicate Varnodes in given list
 public:
   void clear(void);			///< Called for each additional hash (after the first)
   void calcHash(const Varnode *root,uint4 method);	///< Calculate the hash for given Varnode and method
@@ -91,12 +95,14 @@ public:
   static void gatherOpsAtAddress(vector<PcodeOp *> &opList,const Funcdata *fd,const Address &addr);
   static int4 getSlotFromHash(uint8 h);			///< Retrieve the encoded slot from a hash
   static uint4 getMethodFromHash(uint8 h);		///< Retrieve the encoded method from a hash
-  static OpCode getOpCodeFromHash(uint8 h);		///< Retrieve the encoded op-code from a hash
+  static uint4 getOpCodeFromHash(uint8 h);		///< Retrieve the encoded op-code from a hash
   static uint4 getPositionFromHash(uint8 h);		///< Retrieve the encoded position from a hash
   static uint4 getTotalFromHash(uint8 h);		///< Retrieve the encoded collision total from a hash
   static bool getIsNotAttached(uint8 h);		///< Retrieve the attachment boolean from a hash
   static void clearTotalPosition(uint8 &h);		///< Clear the collision total and position fields within a hash
-  static uint4 transtable[];				///< Translation of op-codes to hash values
+  static uint4 getComparable(uint8 h) { return (uint4)h; }	///< Get only the formal hash for comparing
+  static const uint4 transtable[];				///< Translation of op-codes to hash values
 };
 
+} // End namespace ghidra
 #endif

@@ -21,8 +21,7 @@ import java.math.BigInteger;
 import java.util.List;
 
 import ghidra.framework.store.LockException;
-import ghidra.program.model.address.Address;
-import ghidra.program.model.address.AddressSpace;
+import ghidra.program.model.address.*;
 import ghidra.program.model.symbol.OffsetReference;
 import ghidra.util.NamingUtilities;
 
@@ -87,6 +86,12 @@ public interface MemoryBlock extends Serializable, Comparable<MemoryBlock> {
 	public Address getEnd();
 
 	/**
+	 * Get the address range that corresponds to this block.
+	 * @return block address range
+	 */
+	public AddressRange getAddressRange();
+
+	/**
 	 * Get the number of bytes in this block.
 	 * 
 	 * @return number of bytes in the block
@@ -113,8 +118,7 @@ public interface MemoryBlock extends Serializable, Comparable<MemoryBlock> {
 	 * @throws IllegalArgumentException if invalid name specified
 	 * @throws LockException renaming an Overlay block without exclusive access
 	 */
-	public void setName(String name)
-			throws IllegalArgumentException, LockException;
+	public void setName(String name) throws IllegalArgumentException, LockException;
 
 	/**
 	 * Get the comment associated with this block.
@@ -231,10 +235,12 @@ public interface MemoryBlock extends Serializable, Comparable<MemoryBlock> {
 	 * @param off the offset into the byte array.
 	 * @param len the number of bytes to get.
 	 * @return the number of bytes actually populated.
+	 * @throws IndexOutOfBoundsException if invalid offset is specified
 	 * @throws MemoryAccessException if any of the requested bytes are uninitialized.
 	 * @throws IllegalArgumentException if the Address is not in this block.
 	 */
-	public int getBytes(Address addr, byte[] b, int off, int len) throws MemoryAccessException;
+	public int getBytes(Address addr, byte[] b, int off, int len)
+			throws IndexOutOfBoundsException, MemoryAccessException;
 
 	/**
 	 * Puts the given byte at the given address in this block.
@@ -266,18 +272,27 @@ public interface MemoryBlock extends Serializable, Comparable<MemoryBlock> {
 	 * @param off the offset into the byte array.
 	 * @param len the number of bytes to write.
 	 * @return the number of bytes actually written.
+	 * @throws IndexOutOfBoundsException if invalid offset is specified
 	 * @throws MemoryAccessException if the block is uninitialized
 	 * @throws IllegalArgumentException if the Address is not in this block.
 	 */
-	public int putBytes(Address addr, byte[] b, int off, int len) throws MemoryAccessException;
+	public int putBytes(Address addr, byte[] b, int off, int len)
+			throws IndexOutOfBoundsException, MemoryAccessException;
 
 	/**
 	 * Get the type for this block: DEFAULT, BIT_MAPPED, or BYTE_MAPPED
+	 * (see {@link MemoryBlockType}).
+	 * @return memory block type
 	 */
 	public MemoryBlockType getType();
 
 	/**
 	 * Return whether this block has been initialized.
+	 * <p>
+	 * WARNING: A mapped memory block may have a mix of intialized, uninitialized, and undefined 
+	 * regions.  The value returned by this method for a mapped memory block is always false 
+	 * even if some regions are initialized.
+	 * @return true if block is fully initialized and not a memory-mapped-block, else false
 	 */
 	public boolean isInitialized();
 

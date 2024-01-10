@@ -21,7 +21,8 @@ import ghidra.app.util.bin.BinaryReader;
 import ghidra.app.util.importer.MessageLog;
 import ghidra.program.model.address.Address;
 import ghidra.program.model.address.AddressSpace;
-import ghidra.program.model.data.*;
+import ghidra.program.model.data.DataType;
+import ghidra.program.model.data.PointerDataType;
 import ghidra.program.model.listing.Program;
 import ghidra.program.model.mem.DumbMemBufferImpl;
 import ghidra.program.model.symbol.SourceType;
@@ -57,8 +58,8 @@ public class TLSDataDirectory extends DataDirectory {
 
 	@Override
 	public void markup(Program program, boolean isBinary, TaskMonitor monitor, MessageLog log,
-			NTHeader ntHeader) throws DuplicateNameException, CodeUnitInsertionException,
-			DataTypeConflictException, IOException {
+			NTHeader ntHeader)
+			throws DuplicateNameException, CodeUnitInsertionException, IOException {
 
 		monitor.setMessage(program.getName()+": TLS...");
 		Address addr = PeUtils.getMarkupAddress(program, isBinary, ntHeader, virtualAddress);
@@ -68,9 +69,9 @@ public class TLSDataDirectory extends DataDirectory {
 		createDirectoryBookmark(program, addr);
 		PeUtils.createData(program, addr, tls.toDataType(), log);
 
-		// Markup TLS callback functions
+		// Markup TLS callback functions and index
+		AddressSpace space = program.getImageBase().getAddressSpace();
 		if (tls.getAddressOfCallBacks() != 0) {
-			AddressSpace space = program.getImageBase().getAddressSpace();
 			DataType pointerDataType = PointerDataType.dataType.clone(program.getDataTypeManager());
 			try {
 				for (int i = 0; i < 20; i++) { // cap # of TLS callbacks as a precaution (1 is the norm)
@@ -79,7 +80,7 @@ public class TLSDataDirectory extends DataDirectory {
 					Address nextCallbackAddr = PointerDataType.getAddressValue(
 						new DumbMemBufferImpl(program.getMemory(), nextCallbackPtrAddr),
 						pointerDataType.getLength(), space);
-					if (nextCallbackAddr.getOffset() == 0) {
+					if (nextCallbackAddr == null || nextCallbackAddr.getOffset() == 0) {
 						break;
 					}
 					PeUtils.createData(program, nextCallbackPtrAddr, pointerDataType, log);
@@ -90,6 +91,16 @@ public class TLSDataDirectory extends DataDirectory {
 			}
 			catch (InvalidInputException e) {
 				log.appendMsg("TLS", "Failed to markup TLS callback functions: " + e.getMessage());
+			}
+		}
+		if (tls.getAddressOfIndex() != 0) {
+			try {
+				Address indexPtrAddr = space.getAddress(tls.getAddressOfIndex());
+				program.getSymbolTable()
+						.createLabel(indexPtrAddr, "_tls_index", SourceType.IMPORTED);
+			}
+			catch (InvalidInputException e) {
+				log.appendMsg("TLS", "Failed to markup TLS index: " + e.getMessage());
 			}
 		}
 	}

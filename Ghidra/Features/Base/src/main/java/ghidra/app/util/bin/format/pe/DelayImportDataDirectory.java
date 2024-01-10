@@ -86,8 +86,8 @@ public class DelayImportDataDirectory extends DataDirectory {
 
     @Override
 	public void markup(Program program, boolean isBinary, TaskMonitor monitor, MessageLog log,
-			NTHeader ntHeader) throws DuplicateNameException, CodeUnitInsertionException,
-			DataTypeConflictException, IOException {
+			NTHeader ntHeader)
+			throws DuplicateNameException, CodeUnitInsertionException, IOException {
 
     	monitor.setMessage(program.getName()+": delay import(s)...");
 		Address addr = PeUtils.getMarkupAddress(program, isBinary, ntHeader, virtualAddress);
@@ -187,7 +187,7 @@ public class DelayImportDataDirectory extends DataDirectory {
 									DelayImportDescriptor descriptor, 
 									TaskMonitor monitor,
 									MessageLog log)
-			throws DataTypeConflictException, DuplicateNameException {
+			throws DuplicateNameException {
 
 		Map<ThunkData, ImportByName> map = descriptor.getImportByNameMap();
 		Iterator<ThunkData> thunks = map.keySet().iterator();

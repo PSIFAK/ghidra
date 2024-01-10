@@ -29,15 +29,13 @@ import ghidra.util.exception.DuplicateNameException;
 import ghidra.util.task.TaskMonitor;
 
 /**
- * Represents a dylib_command structure.
- * 
- * @see <a href="https://opensource.apple.com/source/xnu/xnu-4570.71.2/EXTERNAL_HEADERS/mach-o/loader.h.auto.html">mach-o/loader.h</a> 
+ * Represents a dylib_command structure 
  */
 public class DynamicLibraryCommand extends LoadCommand {
 	private DynamicLibrary dylib;
 
 	DynamicLibraryCommand(BinaryReader reader) throws IOException {
-		initLoadCommand(reader);
+		super(reader);
 		dylib = new DynamicLibrary(reader, this);
 	}
 
@@ -65,19 +63,16 @@ public class DynamicLibraryCommand extends LoadCommand {
 	}
 
 	@Override
-	public void markup(MachHeader header, FlatProgramAPI api, Address baseAddress, boolean isBinary,
+	public void markupRawBinary(MachHeader header, FlatProgramAPI api, Address baseAddress,
 			ProgramModule parentModule, TaskMonitor monitor, MessageLog log) {
-		updateMonitor(monitor);
 		try {
-			if (isBinary) {
-				createFragment(api, baseAddress, parentModule);
-				Address address = baseAddress.getNewAddress(getStartIndex());
-				api.createData(address, toDataType());
-				LoadCommandString name = dylib.getName();
-				int length = getCommandSize() - name.getOffset();
-				Address strAddr = address.add(name.getOffset());
-				api.createAsciiString(strAddr, length);
-			}
+			super.markupRawBinary(header, api, baseAddress, parentModule, monitor, log);
+
+			Address address = baseAddress.getNewAddress(getStartIndex());
+			LoadCommandString name = dylib.getName();
+			int length = getCommandSize() - name.getOffset();
+			Address strAddr = address.add(name.getOffset());
+			api.createAsciiString(strAddr, length);
 		}
 		catch (Exception e) {
 			log.appendMsg("Unable to create " + getCommandName());
